@@ -1,4 +1,5 @@
- 
+import numpy as np
+
 def gen_edo(x, DBplot=False):
     """compute the envelope derivative operator (EDO), as defined in [1].
     [1] JM O' Toole, A Temko, NJ Stevenson, “Assessing instantaneous energy in the EEG: a
