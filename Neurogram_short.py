@@ -31,6 +31,7 @@ from sklearn import preprocessing
 # Import listed colormap
 from matplotlib.colors import ListedColormap
 import matplotlib.dates as md
+from matplotlib.ticker import FuncFormatter
 
 import plotly.io as plt_io
 import plotly.graph_objects as go
@@ -52,6 +53,8 @@ sys.path.append("../")
 
 class Recording:
     """Class for pre-processing and extracting spikes and HR from electroneurograms (ENG)"""
+
+    window_length = 10000
 
     def __init__(self, neural, fs, length, map_array, filename, column_ch):
         """Constructor of neurogram object.
@@ -91,6 +94,7 @@ class Recording:
         self.thresh_type = []
         self.channels = []
 
+
     @classmethod
     def open_record(cls, path, start, dur=None, load_from_file=False, load_multiple_files=False, downsample=1,
                     port='Port B', map_path=None, verbose=1):
@@ -125,7 +129,7 @@ class Recording:
                                                                         load_from_file=load_from_file,
                                                                         load_multiple_files=load_multiple_files,
                                                                         downsample=downsample,
-                                                                        verbose=verbose)
+                                                                        verbose=verbose, window_length=Recording.window_length)
 
         print(neural)
         length = len(neural)
@@ -387,8 +391,181 @@ class Recording:
             plt.close()
 
 
+    def plot_raw_signals(self, channels=None, start_time=None, end_time=None, figsize=None, ylim=None):
+        """
+        start_time, end_time : [string] in mmmss format e.g. 2 hr 10 min 30 sec -> 13030(xxxx)
+                               ....(xxxx) optional - numbers behind the decimal point to specify fractions of a second
+        """
+        # if signal2plot is None:
+        #     signal2plot = self.recording
+        if channels is None:
+            channels = []
+            for col in self.recording.columns:
+                if col.startswith('ch_'):
+                    # self.recording[col] = self.recording[col].astype('float32')
+                    # channels.append(col.replace('ch_', ''))
+                    channels.append(col[3:])
+
+        if start_time is None:
+            start_index = 0
+        else:
+            start_index = 0
+            start_index += int(start_time[:3]) * 600000
+            start_index += int(start_time[3:5]) * 10000
+            if len(start_time) == 9:
+                start_index += int(start_time[5:])
+
+        if end_time is None:
+            end_index = len(self.recording.index)
+        else:
+            end_index = 0
+            end_index += int(end_time[:3]) * 600000
+            end_index += int(end_time[3:5]) * 10000
+            if len(end_time) == 9:
+                end_index += int(end_time[5:])
+
+        if figsize is None:
+            figsize = (10, 10*len(channels))
+        if ylim is not None:
+            ylim = ylim
+
+        fig, ax = plt.subplots(len(channels), 1, figsize=figsize)
+
+        # def time_formatter(x, pos):
+        #     return pd.to_datetime(x ).strftime('%H:%M:%S')
+
+        x_range = [i for i in range(start_index, end_index)]
+        # x_index = []
+        # for idx in self.recording.index[x_range]:
+        #     idx = str(idx)
+        #     x_index.append(idx.replace('1970-01-01 ', ''))
+        # x_index = self.recording.index[x_range].strftime('%H:%M:%S')
+
+        for i in range(len(channels)):
+            signal = self.recording['ch_%s' % channels[i]][x_range]
+            ax[i].plot(self.recording.index[x_range], signal, linewidth=0.5, zorder=0)
+            # ax[i].xaxis.set_major_formatter(FuncFormatter(time_formatter))
+            ax[i].set_title("Channel %s" % channels[i])
+            ax[i].set_xlabel('Time')
+            ax[i].set_ylabel('Voltage [uV]')
+            if ylim is not None:
+                ax[i].set_ylim(ylim)
+        fig.suptitle('Sampling Frequency: {}Hz'.format(self.fs), font=16)
+
+
+    def discard_MA_0(self, channels=None, std_coeff=3, figsize=None, ylim=None):
+        """
+        Method: Intuitive, calculates the standard deviation of each channel after filtering, and then discard anything
+                above a certain threshold based on the standard deviation
+        Currently plots the data for each channel after discarding the corrupted windows
+        """
+        if not hasattr(self, 'filtered'):
+            return
+
+        if channels is None:
+            channels = []
+            for col in self.recording.columns:
+                if col.startswith('ch_'):
+                    # self.recording[col] = self.recording[col].astype('float32')
+                    # channels.append(col.replace('ch_', ''))
+                    channels.append(col)
+
+        if figsize is None:
+            figsize = (10, 10*len(channels))
+        if ylim is not None:
+            ylim = ylim
+
+        fig, ax = plt.subplots(len(channels), 1, figsize=figsize)
+
+        modified_df = self.filtered.copy()
+        for i in range(len(channels)):
+            windows_to_keep = []
+            std = self.filtered[channels[i]].std()
+            mean = self.filtered[channels[i]].mean()
+            for idx in range(self.length//Recording.window_length + 1):
+                window_mean = self.filtered[self.filtered["window"] == idx][channels[i]].mean()
+                if abs(window_mean - mean) < std * std_coeff:
+                    windows_to_keep.append(idx)
+            values = modified_df[modified_df["window"].isin(windows_to_keep)]
+            x_range = [i for i in range(len(values))]
+            ax[i].plot(x_range, values, linewidth=0.5, zorder=0)
+            ax[i].set_title(f"Channel {channels[i]} after discarding MA corrupted windows")
+            ax[i].set_xlabel('Sample Index')
+            ax[i].set_ylabel('Voltage [uV]')
+            if ylim is not None:
+                ax[i].set_ylim(ylim)
+
+
+
+
+
+    def discard_MA_1(self, channels=None, std_const=2, kts_const=2, skw_const=2, figsize=None, ylim=None):
+        """
+        Method: calculate the standard deviation, skewness and kurtosis of each channel after filtering,
+        and then discard any window where any of the three metrics deviate from the corresponding mean value
+        beyond a threshold.
+        """
+
+        if not hasattr(self, 'filtered'):
+            return
+
+        if channels is None:
+            channels = []
+            for col in self.recording.columns:
+                if col.startswith('ch_'):
+                    # self.recording[col] = self.recording[col].astype('float32')
+                    # channels.append(col.replace('ch_', ''))
+                    channels.append(col)
+
+        if figsize is None:
+            figsize = (10, 10*len(channels))
+        if ylim is not None:
+            ylim = ylim
+
+        fig, ax = plt.subplots(len(channels), 1, figsize=figsize)
+        modified_df = self.filtered.copy()
+        for i in range(len(channels)):
+            windows_to_keep = set()
+            kurtosis = self.filtered[channels[i]].kurtosis()
+            skewness = self.filtered[channels[i]].skew()
+            std = self.filtered[channels[i]].std()
+            for idx in range(self.length//Recording.window_length + 1):
+                window_std = self.filtered[self.filtered["window"] == idx][channels[i]].std()
+                window_kts = self.filtered[self.filtered["window"] == idx][channels[i]].kurtosis()
+                window_skw = self.filtered[self.filtered["window"] == idx][channels[i]].skew()
+                if window_skw > skewness + skw_const:
+                    continue
+                if window_kts > kurtosis + kts_const:
+                    continue
+                if window_std > std + std_const:
+                    continue
+                windows_to_keep.add(idx)
+
+            windows_to_keep = list(windows_to_keep)
+            values = modified_df[modified_df["window"].isin(windows_to_keep)]
+            x_range = [i for i in range(len(values))]
+            ax[i].plot(x_range, values, linewidth=0.5, zorder=0)
+            ax[i].set_title(f"Channel {channels[i]} after discarding MA corrupted windows")
+            ax[i].set_xlabel('Sample Index')
+            ax[i].set_ylabel('Voltage [uV]')
+            if ylim is not None:
+                ax[i].set_ylim(ylim)
+
+    def ICA(self):
+        """
+
+        """
+
+    # def
+
+
+
+
+
+
+
 def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=False, load_multiple_files=False,
-                      downsample=1, verbose=1):
+                      downsample=1, verbose=1, window_length=10000):
     """This method loads...
 
     .. note: This probably should go into a library that could be
@@ -407,6 +584,7 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
                     a previously stored csv or pkl with the dataframe
     downsample: [int] (default: 1) downsampling factor.
     verbose:    [int] signal to display text information (default 1 - show text)
+    window_length: [int] The number of samples to have per window of data. Set to 50000 (1 minute long) by default
 
     Returns
     -------
@@ -470,6 +648,9 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
 
             # Check the file is a data file
             if neural.index.name == 'time':
+                # Convert neural.index to HH:MM:SS format
+
+
                 # Set time interval
                 print(start)
                 if dur is None:
@@ -626,5 +807,12 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
         print('Saving data into: %s/%s_%s.pkl' % (path, basename_without_ext, port))
         neural.to_pickle(r'%s/%s_%s.pkl' % (path, basename_without_ext, port))
 
+    # Divide the data into windows depending on window_length
+    neural['window'] = [i // window_length for i in range(stop)]
+
+
     # Return
     return neural, fs, basename_without_ext, channels
+
+
+
