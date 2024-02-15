@@ -450,7 +450,7 @@ class Recording:
             ax[i].set_ylabel('Voltage [uV]')
             if ylim is not None:
                 ax[i].set_ylim(ylim)
-        fig.suptitle('Sampling Frequency: {}Hz'.format(self.fs), font=16)
+        fig.suptitle('Sampling Frequency: {}Hz'.format(self.fs), fontsize=16)
 
 
     def discard_MA_0(self, channels=None, std_coeff=3, figsize=None, ylim=None):
@@ -674,6 +674,9 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
                 print(channels)
                 basename_without_ext = os.path.splitext(os.path.basename(filepath))[0]
             else:
+
+
+
                 print('ERROR: You have selected a wrong file, try again')
                 sys.exit()
 
