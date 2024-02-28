@@ -58,14 +58,14 @@ if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
 
-print('Checkpoint1')
+print("Setup started...")
+print("------------------------------------------------------\n\n\n\n\n")
+
 # Own libraries
 from Neurogram_short import * # Recording, MyWavelet, MyWaveforms
 from additional_functions import *
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
-
-print('Checkpoint2')
 
 
 
