@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from pyqtgraph import AxisItem, ImageItem
 import numpy as np
 import time
-
+from Video_Player_prototype1 import VideoPlayer
 
 
 # Add the parent directory to sys.path
@@ -87,26 +87,31 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Video and Data Plotter")
 
+        self.setGeometry(100, 100, 400, 800)
+
+
         self.top_layout = QVBoxLayout()
         self.middle_layout = QHBoxLayout()
         self.bottom_layout = QHBoxLayout()
 
         # Buttons for loading video and plotting data, and label to indicate loading
-        self.load_video_button = QPushButton("Load Video")
-        self.load_video_button.clicked.connect(self.load_video)
+        # self.load_video_button = QPushButton("Load Video")
+        # self.load_video_button.clicked.connect(self.load_video)
+        self.video_player = VideoPlayer()
         self.plot_data_button = QPushButton("Plot Data")
         self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
 
         self.loading_label = QLabel("")
 
-        self.top_layout.addWidget(self.load_video_button)
+        # self.top_layout.addWidget(self.load_video_button)
+        self.top_layout.addWidget(self.video_player)
         self.middle_layout.addWidget(self.plot_data_button)
         self.bottom_layout.addWidget(self.loading_label)
 
         self.main_layout = QVBoxLayout()
-        self.main_layout.addLayout(self.top_layout)
-        self.main_layout.addLayout(self.middle_layout)
-        self.main_layout.addLayout(self.bottom_layout)
+        self.main_layout.addLayout(self.top_layout, 2)
+        self.main_layout.addLayout(self.middle_layout, 1)
+        self.main_layout.addLayout(self.bottom_layout, 1)
 
         self.central_widget = QWidget()
         self.central_widget.setLayout(self.main_layout)
@@ -213,27 +218,27 @@ class MainWindow(QMainWindow):
     #     self.canvas_2.draw()
     #
 
-    def load_video(self):
+    # def load_video(self):
         # Video Player
-        self.video_player = QMediaPlayer()
-        video_widget = QVideoWidget()
-        self.video_player.setVideoOutput(video_widget)
-
-        # Remove buttons and add video widget to layout
-        self.top_layout.removeWidget(self.load_video_button)
-        self.load_video_button.deleteLater()
-        self.load_video_button = None
-
-
-        self.top_layout.addWidget(video_widget, 2)  # 1/3 of the space for video
-
-        # Setup video source (replace with your video file path)
-        # video_path = "../../../datasets/rat7&8/day2/rat7&8_Day2_noSound.mp4"
-        video_path = r"C:\Users\airbl\OneDrive - University of Cambridge\Documents\Cambridge Work IIB\IIB Project\Code\code_Peter\datasets\Misc_files_for_testing\test.mp4"
-        self.video_player.setSource(QUrl.fromLocalFile(video_path))
-
-        # Start the video
-        self.video_player.play()
+        # self.video_player = QMediaPlayer()
+        # video_widget = QVideoWidget()
+        # self.video_player.setVideoOutput(video_widget)
+        #
+        # # Remove buttons and add video widget to layout
+        # self.top_layout.removeWidget(self.load_video_button)
+        # self.load_video_button.deleteLater()
+        # self.load_video_button = None
+        #
+        #
+        # self.top_layout.addWidget(video_widget, 2)  # 1/3 of the space for video
+        #
+        # # Setup video source (replace with your video file path)
+        # # video_path = "../../../datasets/rat7&8/day2/rat7&8_Day2_noSound.mp4"
+        # video_path = r"C:\Users\airbl\OneDrive - University of Cambridge\Documents\Cambridge Work IIB\IIB Project\Code\code_Peter\datasets\Misc_files_for_testing\test.mp4"
+        # self.video_player.setSource(QUrl.fromLocalFile(video_path))
+        #
+        # # Start the video
+        # self.video_player.play()
 
 
 
