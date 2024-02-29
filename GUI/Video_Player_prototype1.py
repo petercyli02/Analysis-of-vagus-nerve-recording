@@ -137,8 +137,8 @@ class VideoPlayer(QWidget):
         self.update_position_label(0)
 
 
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    player = VideoPlayer()
-    player.show()
-    sys.exit(app.exec())
+# if __name__ == '__main__':
+#     app = QApplication(sys.argv)
+#     player = VideoPlayer()
+#     player.show()
+#     sys.exit(app.exec())
