@@ -92,9 +92,9 @@ class MainWindow(QMainWindow):
         self.show_ma_action.setCheckable(True)
         self.show_ma_action.setChecked(True)
         self.show_ma_action.toggled.connect(self.toggle_show_ma)
-        self.adjust_offset_action = QAction("Show Motion Artifacts", self)
-        self.toolbar.addAction(self.adjust_offset_action)
-        self.toolbar.addSeparator()
+        # self.adjust_offset_action = QAction("Show Motion Artifacts", self)
+        # self.toolbar.addAction(self.adjust_offset_action)
+        # self.toolbar.addSeparator()
         # self.toolbar.addWidget(QLabel("Show Motion Artifacts"))
         # self.toolbar.addWidget(QCheckBox())
 
@@ -108,6 +108,10 @@ class MainWindow(QMainWindow):
 
         # Focus policy to ensure we can receive key presses
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Creating an indicator for if the spacebar is held down
+        self.spacebar_mode = False
+        self.rewind_speed = 200  # Each time A is pressed, rewind by ___ milliseconds
 
     def load_movement_data(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Load Movement Intervals", "", "CSV (*.csv)")
@@ -190,6 +194,24 @@ class MainWindow(QMainWindow):
         if self.plotter_adjustable and self.plotter_whole and not event.isAutoRepeat():
             if self.video_player.mediaPlayer.source and event.key() == Qt.Key.Key_Space:
                 self.movement_start = self.video_player.mediaPlayer.position() / 1000  # .position() gives the timestamp in milliseconds
+                self.set_marker_value(self.movement_start)
+                self.set_marker_visibility(True)
+                if not self.spacebar_mode:
+                    self.spacebar_mode = True
+                    self.video_player.mediaPlayer.pause()
+
+            elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
+                self.video_player.mediaPlayer.play()
+            elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
+                # self.video_player.mediaPlayer.setPlaybackRate(-1 * self.video_player.mediaPlayer.playbackRate())
+                # self.video_player.mediaPlayer.play()
+                self.video_player.mediaPlayer.setPosition(max(0, self.video_player.mediaPlayer.position() - self.rewind_speed))
+                if self.video_player.mediaPlayer.position() < 1000 * self.movement_start:
+                    # print("Video player position:", self.video_player.mediaPlayer.position())
+                    self.movement_start = self.video_player.mediaPlayer.position() / 1000.0
+                    self.set_marker_value(self.video_player.mediaPlayer.position() / 1000.0)
+                    # print("Start marker position:", self.plotter_adjustable.movement_start_marker.value())
+
             elif event.key() == Qt.Key.Key_Left:
                 self.plotter_adjustable.left_timer.start()
             elif event.key() == Qt.Key.Key_Right:
@@ -205,6 +227,8 @@ class MainWindow(QMainWindow):
     def keyReleaseEvent(self, event):
         if self.plotter_adjustable and self.plotter_whole and not event.isAutoRepeat():
             if self.movement_start and event.key() == Qt.Key.Key_Space:
+                self.spacebar_mode = False
+                self.video_player.mediaPlayer.play()
                 self.movement_end = self.video_player.mediaPlayer.position() / 1000  # .position() gives the timestamp in milliseconds
                 if self.movement_end > self.movement_start:
                     itv = (self.movement_start, self.movement_end)
@@ -212,6 +236,14 @@ class MainWindow(QMainWindow):
                     Plotter.new_timestamps.append(itv)
                     Plotter.add_region(itv)
                 self.movement_start, self.movement_end = None, None
+                self.set_marker_visibility(False)
+
+            # elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
+            #     self.video_player.mediaPlayer.pause()
+                # self.video_player.mediaPlayer.setPlaybackRate(-1 * self.video_player.mediaPlayer.playbackRate())
+            elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
+                self.video_player.mediaPlayer.pause()
+
             elif event.key() == Qt.Key.Key_Left:
                 self.plotter_adjustable.left_timer.stop()
             elif event.key() == Qt.Key.Key_Right:
@@ -223,12 +255,20 @@ class MainWindow(QMainWindow):
             else:
                 super().keyReleaseEvent(event)
 
+    def set_marker_visibility(self, visible):
+        self.plotter_adjustable.movement_start_marker.setVisible(visible)
+        self.plotter_whole.movement_start_marker.setVisible(visible)
+
+    def set_marker_value(self, val):
+        self.plotter_adjustable.movement_start_marker.setValue(val)
+        self.plotter_whole.movement_start_marker.setValue(val)
 
 
 def ms_to_iso8601(ms):
     s = ms / 1000.0
     dt = datetime.fromtimestamp(s, tz=timezone.utc)
     return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
 
 
 class DataLoaderThread(QThread):
@@ -344,6 +384,7 @@ class Plotter(QWidget):
     selected_interval = None
 
 
+
     def __init__(self, data, ylim):
         super().__init__()
         Plotter.data = data
@@ -352,10 +393,13 @@ class Plotter(QWidget):
         self.ylim = ylim
         self.x, self.y = data[0], data[1]
 
-        self.marker = InfiniteLine(angle=90, movable=False, pen='r')
+        self.current_marker = InfiniteLine(angle=90, movable=False, pen='r')
+        self.movement_start_marker = InfiniteLine(angle=90, movable=False, pen='#FF5C5C')
 
         self.layout.addLayout(self.inner_layout)
         self.setLayout(self.layout)
+
+        self.movement_start_marker.setVisible(False)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -370,7 +414,8 @@ class Plotter(QWidget):
 
         self.plot = self.plot_widget_whole.plot(self.x, self.y)
 
-        Plotter.plot_widget_whole.addItem(self.marker)
+        Plotter.plot_widget_whole.addItem(self.current_marker)
+        Plotter.plot_widget_whole.addItem(self.movement_start_marker)
         width = self.x[-1]
         Plotter.viewRect.setRect(QRectF(0, -250, width, 500)) # Plotter.plot_widget_whole.plotItem.vb.height()))
         Plotter.plot_widget_whole.plotItem.vb.addItem(Plotter.viewRect)
@@ -391,7 +436,8 @@ class Plotter(QWidget):
 
         self.plot = Plotter.plot_widget_zoom.plot(self.x, self.y)
 
-        Plotter.plot_widget_zoom.addItem(self.marker)
+        Plotter.plot_widget_zoom.addItem(self.current_marker)
+        Plotter.plot_widget_zoom.addItem(self.movement_start_marker)
 
         Plotter.plot_widget_zoom.sigRangeChanged.connect(self.update_view_rect_on_zoom)
 
@@ -456,7 +502,7 @@ class Plotter(QWidget):
     def update_marker(self, position):
         time_in_seconds = position / 1000
 
-        self.marker.setValue(time_in_seconds)
+        self.current_marker.setValue(time_in_seconds)
 
 
     def update_view_rect(self, sliderPosition=None):

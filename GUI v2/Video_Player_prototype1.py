@@ -90,7 +90,7 @@ class VideoPlayer(QWidget):
             # self.openButton = None
             self.mediaPlayer.setSource(QUrl.fromLocalFile(filename))
             self.playButton.setEnabled(True)
-            self.mediaPlayer.play()
+            # self.mediaPlayer.play()
 
     def play(self):
         if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
