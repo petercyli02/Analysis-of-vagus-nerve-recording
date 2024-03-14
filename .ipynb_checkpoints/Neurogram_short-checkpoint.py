@@ -190,7 +190,7 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
     # Extract directory of current path
     # dir_name = os.path.dirname(path)
 
-    # Open GUI for selecting file
+    # Open GUI v1 for selecting file
     Tk().withdraw()  # keep the root window from appearing
     print(path)
     # If data has been previously stored
@@ -305,7 +305,7 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
             basename_end = os.path.splitext(os.path.basename(filepath_end))[0]
             basename_without_ext = basename_init+'_'+basename_end[-6:]
         else:  
-            # Open GUI for selecting file
+            # Open GUI v1 for selecting file
             filepath_init = askopenfile(initialdir=path, title="Select data file (.mat or .rhs)",
                                     filetypes=[("rhs", ".rhs"), ("matlab", ".mat")])
             filepath_init = filepath_init.name

@@ -33,14 +33,11 @@ class MainWindow(QMainWindow):
 
         self.setGeometry(100, 100, 400, 800)
 
-
         self.top_layout = QVBoxLayout()
         self.middle_layout = QHBoxLayout()
         self.bottom_layout = QHBoxLayout()
 
         # For sliding horizontal on the adjustable plot
-        self.bottom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.bottom_slider.setMinimum(0)
 
         self.video_player = VideoPlayer()
         self.plot_data_button = QPushButton("Plot Data")
@@ -66,7 +63,7 @@ class MainWindow(QMainWindow):
 
     def on_plot_data_button_clicked(self):
         """
-        Intermediary method of plotting data, serves as the slot for when data is loaded in startup of the GUI
+        Intermediary method of plotting data, serves as the slot for when data is loaded in startup of the GUI v1
         For now, manually specifies values for the various parameters passed to the actual plot_data(...) function
         """
         # Indicate that the data is loading
@@ -77,11 +74,11 @@ class MainWindow(QMainWindow):
         self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
         self.data_loader_thread.start()
 
-        print("on_plot_data_button_clicked finished!")
+        # print("on_plot_data_button_clicked finished!")
 
 
     def on_data_loaded(self, data):
-        print("on_data_loaded triggered!")
+        # print("on_data_loaded triggered!")
         self.plot_data_whole(data, ylim=(-250, 250))
         self.plot_data_adjustable(data, ylim=(-250, 250))
 
@@ -148,13 +145,13 @@ class DataLoaderThread(QThread):
         self.x = np.arange(0, len(self.x_range)) / self.sample_rate
         self.y = record.filtered['ch_%s' % channel][self.x_range]
 
-
-        print("\n\n\n")
-        print("Emitting data for channel %s" % channel)
-        print(self.x)
-        print(self.y)
-        print("Data emitted.")
-
+        #
+        # print("\n\n\n")
+        # print("Emitting data for channel %s" % channel)
+        # print(self.x)
+        # print(self.y)
+        # print("Data emitted.")
+        #
         self.data_loaded.emit((self.x, self.y))
 
 
@@ -180,16 +177,20 @@ class Plotter(QWidget):
     def __init__(self, data, ylim):
         super().__init__()
         Plotter.data = data
+        self.inner_layout = QVBoxLayout()
         self.layout = QHBoxLayout()
         self.ylim = ylim
         self.x, self.y = data[0], data[1]
+
         self.marker = InfiniteLine(angle=90, movable=False, pen='r')
+
+        self.layout.addLayout(self.inner_layout)
         self.setLayout(self.layout)
 
 
 
     def plot_data_whole(self):
-        print("plot_data_whole called!")
+        # print("plot_data_whole called!")
 
         Plotter.plot_widget_whole = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
         self.plot = self.plot_widget_whole.plot(self.x, self.y)
@@ -201,12 +202,12 @@ class Plotter(QWidget):
 
         Plotter.plot_widget_whole.setYRange(-250, 250)
 
-        self.layout.addWidget(Plotter.plot_widget_whole)
+        self.inner_layout.addWidget(Plotter.plot_widget_whole)
 
 
 
     def plot_data_adjustable(self):
-        print("plot_data_adjustable called!")
+        # print("plot_data_adjustable called!")
         # self.layout.removeWidget(self.button)
         # self.button.deleteLater()
         # self.button = None
@@ -217,7 +218,9 @@ class Plotter(QWidget):
 
         Plotter.plot_widget_zoom.addItem(self.marker)
 
-        Plotter.plot_widget_zoom.sigRangeChanged.connect(self.updateViewRect)
+        Plotter.plot_widget_zoom.sigRangeChanged.connect(self.update_view_rect_on_zoom)
+
+        Plotter.plot_widget_zoom.sigRangeChanged.connect(self.adjust_slider_position)
 
         Plotter.plot_widget_zoom.setYRange(-250, 250)
 
@@ -225,13 +228,21 @@ class Plotter(QWidget):
 
         Plotter.plot_widget_zoom.setXRange(0, self.x[-1], padding=0)  # Window range set to first 20 seconds
 
-        self.layout.addWidget(Plotter.plot_widget_zoom)
+        self.inner_layout.addWidget(Plotter.plot_widget_zoom)
 
         self.slider = QSlider(Qt.Orientation.Vertical)
         self.slider.setMinimum(1)
         self.slider.setMaximum(100)
         self.slider.setValue(10)
+
+        self.bottom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.bottom_slider.setMinimum(self.x[0])
+        self.bottom_slider.setMaximum(self.x[-1])
+
+        self.inner_layout.addWidget(self.bottom_slider)
+
         self.slider.valueChanged.connect(self.update_zoom)
+        self.bottom_slider.valueChanged.connect(self.on_slider_value_changed)
 
         self.layout.addWidget(self.slider)
 
@@ -241,14 +252,30 @@ class Plotter(QWidget):
         self.marker.setValue(time_in_seconds)
 
 
-    def updateViewRect(self):
+    def update_view_rect(self, sliderPosition=None):
         viewRange = Plotter.plot_widget_zoom.viewRange()
-        x_start = viewRange[0][0]
-        width = viewRange[0][1] - x_start
+        if not sliderPosition:
+            x_start = viewRange[0][0]
+        else:
+            x_start = sliderPosition
+
+        width = viewRange[0][1] - viewRange[0][0]
         height = 500
         # Update the rectangle's dimensions to match the visible range in the zoom plot
         Plotter.viewRect.setRect(QRectF(x_start, -250, width, height))
 
+    def on_slider_value_changed(self, sliderPosition):
+        self.update_view_rect(sliderPosition=sliderPosition)
+        viewRange = Plotter.plot_widget_zoom.viewRange()
+        width = viewRange[0][1] - viewRange[0][0]
+        x_start = sliderPosition
+        x_end = x_start + width
+
+        # if x_end > self.x[-1]:
+        #     x_end = self.x[-1]
+        #     x_start = max(0, x_end - width)
+
+        Plotter.plot_widget_zoom.setXRange(x_start, x_end)
 
     def update_zoom(self):
         zoom_factor = self.slider.value()
@@ -257,8 +284,23 @@ class Plotter(QWidget):
         center_point = Plotter.plot_widget_zoom.plotItem.viewRange()[0][0] + current_zoom / 2
         Plotter.plot_widget_zoom.setXRange(center_point - current_zoom / 2, center_point + current_zoom / 2, padding=0)
 
+    def update_view_rect_on_zoom(self):
+        self.update_view_rect()
 
+    def adjust_slider_position(self):
+        view_range = Plotter.plot_widget_zoom.viewRange()[0]
+        # Calculate the middle of the current view range
+        middle_x = (view_range[0] + view_range[1]) / 2
 
+        # Map this middle_x value back to the slider's range
+        total_data_range = self.x[-1] - self.x[0]
+        relative_position = (middle_x - self.x[0]) / total_data_range
+        new_slider_value = relative_position * (
+                    self.bottom_slider.maximum() - self.bottom_slider.minimum()) + self.bottom_slider.minimum()
+
+        self.bottom_slider.blockSignals(True)
+        self.bottom_slider.setValue(int(new_slider_value))
+        self.bottom_slider.blockSignals(False)
 
 
 app = QApplication(sys.argv)
