@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(load_data_action)
         open_artifact_file_action = QAction("Load Movement Data")
         open_artifact_file_action.triggered.connect(self.load_movement_data)
+        self.file_menu.addAction(open_artifact_file_action)
         self.save_action = QAction("Save", self)
         self.save_action.triggered.connect(self.save)
         self.save_action.setEnabled(False)
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
         save_as_action = QAction("Save As", self)
         save_as_action.triggered.connect(self.save_as)
         self.file_menu.addAction(save_as_action)
+        new_window
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
 
@@ -107,7 +109,7 @@ class MainWindow(QMainWindow):
         self.current_file = None
 
         # Focus policy to ensure we can receive key presses
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Creating an indicator for if the spacebar is held down
         self.spacebar_mode = False
@@ -120,17 +122,29 @@ class MainWindow(QMainWindow):
             reader = csv.reader(file)
             for row in reader:
                 # self.timestamps.append((row[0], row[1]))
-                Plotter.interval_regions[(row[0], row[1])] = ClickableLinearRegionItem(values=[(row[0], row[1])])
+                Plotter.interval_regions[(row[0], row[1])] = [ClickableLinearRegionItem(values=[(row[0], row[1])]), ClickableLinearRegionItem(values=[(row[0], row[1])])]
 
     def save(self):
         with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
             writer = csv.writer(file)
             for start, end in Plotter.new_timestamps:
                 # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
-                writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
+                writer.writerow([start, end])
+                # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
                 # Plotter.timestamps.append((start, end))
                 # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
         Plotter.new_timestamps.clear()
+        remaining_intervals = []
+        with open(self.current_file, 'r', newline='') as file:
+            reader = csv.reader(file)
+            for row in reader:
+                interval = tuple(row)
+                if interval not in Plotter.entries_to_delete:
+                    remaining_intervals.append(interval)
+        with open(self.current_file, 'w', newline='') as file:
+            writer = csv.writer(file)
+            for interval in remaining_intervals:
+                writer.writerow(interval)
 
     def save_as(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "CSV (*.csv)")
@@ -220,6 +234,13 @@ class MainWindow(QMainWindow):
                 self.plotter_adjustable.zoom_in_timer.start()
             elif event.key() == Qt.Key.Key_Down:
                 self.plotter_adjustable.zoom_out_timer.start()
+            elif Plotter.selected_region and event.key() == Qt.Key.Key_Delete:
+                Plotter.delete_selected_interval()
+
+            # elif event.key() == Qt.Key.Key_H:
+            #     for i in range(10):
+            #         testRegion = ClickableLinearRegionItem(values=(10*i, 10*i + 50))
+            #         Plotter.plot_widget_whole.addItem(testRegion)
             else:
                 super().keyPressEvent(event)
 
@@ -265,9 +286,13 @@ class MainWindow(QMainWindow):
 
 
 def ms_to_iso8601(ms):
+    """
+    For displaying the timestamps in milliseconds in a readable format
+    """
     s = ms / 1000.0
     dt = datetime.fromtimestamp(s, tz=timezone.utc)
-    return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    # return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    return dt.strftime('%H:%M:%S.%f')[:-3]
 
 
 
@@ -312,9 +337,6 @@ class DataLoaderThread(QThread):
         self.y = record.filtered['ch_%s' % channel][self.x_range]
 
         self.data_loaded.emit((self.x, self.y))
-
-
-
 
 
 
@@ -367,11 +389,25 @@ class ClickableLinearRegionItem(LinearRegionItem):
         self.regionSelected.emit(self)
         event.accept()
 
+    def hoverEvent(self, event):
+        # If this region is not the selected region, process hover events normally.
+        if  not Plotter.selected_region or Plotter.selected_region[1] is not self:
+            super(ClickableLinearRegionItem, self).hoverEvent(event)
 
+    def hoverEnterEvent(self, event):
+        # If this region is not the selected region, process hover enter events normally.
+        if not Plotter.selected_region or Plotter.selected_region[1] is not self:
+            super(ClickableLinearRegionItem, self).hoverEnterEvent(event)
 
+    def hoverLeaveEvent(self, event):
+        # If this region is not the selected region, process hover leave events normally.
+        if not Plotter.selected_region or Plotter.selected_region[1] is not self:
+            super(ClickableLinearRegionItem, self).hoverLeaveEvent(event)
 
 
 class Plotter(QWidget):
+    plot_widget_whole = None
+    plot_widget_zoom = None
     data = None
     viewRect = QGraphicsRectItem()
     viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
@@ -380,10 +416,10 @@ class Plotter(QWidget):
     timestamps = []
     new_timestamps = []
     interval_regions = {}
-    selected_region = None
+    selected_region = []
     selected_interval = None
 
-
+    entries_to_delete = set()
 
     def __init__(self, data, ylim):
         super().__init__()
@@ -409,10 +445,10 @@ class Plotter(QWidget):
         Plotter.plot_widget_whole = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
 
         # Attempt to disable default key handling
-        view_box = Plotter.plot_widget_whole.getViewBox()
-        view_box.keyPressEvent = lambda event: None
+        # view_box = Plotter.plot_widget_whole.getViewBox()
+        # view_box.keyPressEvent = lambda event: None
 
-        self.plot = self.plot_widget_whole.plot(self.x, self.y)
+        self.plot = Plotter.plot_widget_whole.plot(self.x, self.y)
 
         Plotter.plot_widget_whole.addItem(self.current_marker)
         Plotter.plot_widget_whole.addItem(self.movement_start_marker)
@@ -431,8 +467,8 @@ class Plotter(QWidget):
         Plotter.plot_widget_zoom = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
 
         # Attempt to disable default key handling
-        view_box = Plotter.plot_widget_zoom.getViewBox()
-        view_box.keyPressEvent = lambda event: None
+        # view_box = Plotter.plot_widget_zoom.getViewBox()
+        # view_box.keyPressEvent = lambda event: None
 
         self.plot = Plotter.plot_widget_zoom.plot(self.x, self.y)
 
@@ -440,6 +476,7 @@ class Plotter(QWidget):
         Plotter.plot_widget_zoom.addItem(self.movement_start_marker)
 
         Plotter.plot_widget_zoom.sigRangeChanged.connect(self.update_view_rect_on_zoom)
+        Plotter.plot_widget_zoom.scene().sigMouseClicked.connect(self.on_plot_clicked)
 
         Plotter.plot_widget_zoom.setYRange(-250, 250)
 
@@ -497,7 +534,7 @@ class Plotter(QWidget):
         self.layout.addWidget(self.slider)
 
         # For selecting regions to delete/edit
-        self.proxy = SignalProxy(Plotter.plot_widget_zoom.scene().sigMouseClicked, rateLimit=60, slot=self.on_plot_clicked)
+        # self.proxy = SignalProxy(Plotter.plot_widget_zoom.scene().sigMouseClicked, rateLimit=60, slot=self.on_plot_clicked)
 
     def update_marker(self, position):
         time_in_seconds = position / 1000
@@ -572,15 +609,12 @@ class Plotter(QWidget):
 
 
     def on_plot_clicked(self, event):
-        pos = event[0].scenePos()
-
-        for region in Plotter.interval_regions.values():
-            if region.getRegion()[0] < pos.x() < region.getRegion()[1]:
-                self.select_region(region)
-                return
-
+        # print(event)
+        # print(type(event))
+        # print("event.pos():", event.pos())
+        pos = event.pos()
         for itv, reg in Plotter.interval_regions.items():
-            if reg.getRegion()[0] < pos.x() < reg.getRegion()[1]:
+            if reg[1].getRegion()[0] < pos.x() < reg[1].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
                 self.select_region(itv)
 
 
@@ -603,11 +637,19 @@ class Plotter(QWidget):
             cls.deselect_region()
 
         cls.selected_region = Plotter.interval_regions[itv]
-        cls.selected_region.setBrush('g')
+        selected_region_brush = QBrush(QColor(0, 255, 0, 50))
+        cls.selected_region[0].setBrush(selected_region_brush)
+        cls.selected_region[1].setBrush(selected_region_brush)
+        cls.selected_region[0].update()
+        cls.selected_region[1].update()
 
     @classmethod
     def deselect_region(cls):
-        cls.selected_region.setBrush(None)
+        default_brush = QBrush(QColor(0, 0, 255, 50))
+        cls.selected_region[0].setBrush(default_brush)
+        cls.selected_region[1].setBrush(default_brush)
+        cls.selected_region[0].update()
+        cls.selected_region[1].update()
         cls.selected_region = None
         cls.selected_interval = None
 
@@ -615,19 +657,22 @@ class Plotter(QWidget):
 
     @classmethod
     def add_region(cls, itv):
-        region = ClickableLinearRegionItem(values=itv)
+        region = [ClickableLinearRegionItem(values=itv), ClickableLinearRegionItem(values=itv)]
         cls.interval_regions[itv] = region
-        # region.regionSelected.connect(cls.on_region_selected)
-        if window.show_ma_action.isChecked():
-            cls.plot_widget_whole.addItem(region)
-            cls.plot_widget_zoom.addItem(region)
 
+        # region[1].regionSelected.connect(cls.selected_region)
+
+        if window.show_ma_action.isChecked():
+            cls.plot_widget_whole.addItem(region[0])
+            cls.plot_widget_zoom.addItem(region[1])
+            print("Region Added, interval:", itv)
 
     @classmethod
     def delete_region(cls):
         if cls.selected_region:
-            cls.plot_widget_whole.removeItem(cls.selected_region)
-            cls.plot_widget_zoom.removeItem(cls.selected_region)
+            cls.plot_widget_whole.removeItem(cls.selected_region[0])
+            cls.plot_widget_zoom.removeItem(cls.selected_region[1])
+            cls.entries_to_delete.add(cls.selected_interval)
             del cls.interval_regions[cls.selected_interval]
             cls.selected_region = None
             cls.selected_interval = None
@@ -635,22 +680,22 @@ class Plotter(QWidget):
     @classmethod
     def display_intervals(cls):
         for region in cls.interval_regions.values():
-            cls.plot_widget_whole.addItem(region)
-            cls.plot_widget_zoom.addItem(region)
+            cls.plot_widget_whole.addItem(region[0])
+            cls.plot_widget_zoom.addItem(region[1])
 
 
     @classmethod
     def clear_intervals(cls):
         for region in cls.interval_regions.values():
-            cls.plot_widget_whole.removeItem(region)
-            cls.plot_widget_zoom.removeItem(region)
+            cls.plot_widget_whole.removeItem(region[0])
+            cls.plot_widget_zoom.removeItem(region[1])
 
 
     @classmethod
     def delete_selected_interval(cls):
         if cls.selected_region:
-            Plotter.plot_widget_whole.removeItem(cls.selected_region)
-            Plotter.plot_widget_zoom.removeItem(cls.selected_region)
+            Plotter.plot_widget_whole.removeItem(cls.selected_region[0])
+            Plotter.plot_widget_zoom.removeItem(cls.selected_region[1])
             interval_to_remove = None
             for itv, region in Plotter.interval_regions.items():
                 if region == cls.selected_region:
@@ -660,7 +705,23 @@ class Plotter(QWidget):
                 del cls.interval_regions[interval_to_remove]
             cls.selected_region = None
 
+    @classmethod
+    def keyPressEvent(cls, event):
+        if cls.selected_region and event.key() == Qt.Key.Key_Delete:
+            cls.delete_selected_interval()
 
+    # @classmethod
+    # def mousePressEvent(self, event):
+    #     pos = event[0].scenePos()
+    #     #
+    #     # for region in Plotter.interval_regions.values():
+    #     #     if region[1].getRegion()[0] < pos.x() < region[1].getRegion()[1]:
+    #     #         self.select_region(region)
+    #     #         return
+    #
+    #     for itv, reg in Plotter.interval_regions.items():
+    #         if reg[0].getRegion()[0] < pos.x() < reg[0].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
+    #             self.select_region(itv)
 
 
 app = QApplication(sys.argv)
