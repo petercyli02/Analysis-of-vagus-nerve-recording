@@ -17,6 +17,10 @@ import numpy as np
 import time
 from Video_Player_prototype1 import VideoPlayer
 
+# Import my own functions
+from prototype2_setup import setup
+from Neurogram_short import Recording
+
 
 # Add the parent directory to sys.path
 current_script_path = os.path.dirname(__file__)
@@ -38,6 +42,9 @@ class MainWindow(QMainWindow):
         self.top_layout = QVBoxLayout()
         self.middle_layout = QHBoxLayout()
         self.bottom_layout = QHBoxLayout()
+
+        self.plotter_adjustable = None
+        self.plotter_whole = None
 
         # For sliding horizontal on the adjustable plot
 
@@ -81,7 +88,9 @@ class MainWindow(QMainWindow):
         save_as_action = QAction("Save As", self)
         save_as_action.triggered.connect(self.save_as)
         self.file_menu.addAction(save_as_action)
-        new_window
+        clear_window_action = QAction("Clear Window", self)
+        clear_window_action.triggered.connect(self.clear_window)
+        self.file_menu.addAction(clear_window_action)
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
 
@@ -115,6 +124,32 @@ class MainWindow(QMainWindow):
         self.spacebar_mode = False
         self.rewind_speed = 200  # Each time A is pressed, rewind by ___ milliseconds
 
+
+    def clear_window(self):
+        self.video_player.mediaPlayer.setSource(QUrl())
+        if self.plotter_adjustable or self.plotter_whole:
+            self.middle_layout.removeWidget(self.plotter_whole)
+            self.plotter_whole.deleteLater()
+            self.plot_widget_whole = None
+            self.bottom_layout.removeWidget(self.plotter_adjustable)
+            self.plotter_adjustable.deleteLater()
+            self.plotter_adjustable = None
+
+            self.loading_label = QLabel("")
+            self.bottom_layout.addWidget(self.loading_label)
+
+            self.plot_data_button = QPushButton("Plot Data")
+            self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
+            self.middle_layout.addWidget(self.plot_data_button)
+
+
+            # self.plotter_adjustable.lower_layout.removeWidget(Plotter.left_button)
+            # self.plotter_adjustable.left_button.deleteLater()
+            # self.plotter_adjustable.lower_Layout.removeWidget(Plotter.right_button)
+            # self.plotter_adjustable.right_button.deleteLater()
+        Plotter.reset_class_attributes()
+
+
     def load_movement_data(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Load Movement Intervals", "", "CSV (*.csv)")
         self.current_file = filepath
@@ -122,7 +157,12 @@ class MainWindow(QMainWindow):
             reader = csv.reader(file)
             for row in reader:
                 # self.timestamps.append((row[0], row[1]))
-                Plotter.interval_regions[(row[0], row[1])] = [ClickableLinearRegionItem(values=[(row[0], row[1])]), ClickableLinearRegionItem(values=[(row[0], row[1])])]
+                region_whole = ClickableLinearRegionItem(values=[(row[0], row[1])])
+                region_zoom = ClickableLinearRegionItem(values=[(row[0], row[1])])
+                Plotter.interval_regions[(row[0], row[1])] = [region_whole, region_zoom]
+                if self.show_ma_action.isChecked() and Plotter.plot_widget_whole and Plotter.plot_widget_zoom:
+                    Plotter.plot_widget_whole.addItem(region_whole)
+                    Plotter.plot_widget_zoom.addItem(region_zoom)
 
     def save(self):
         with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
@@ -169,8 +209,19 @@ class MainWindow(QMainWindow):
         For now, manually specifies values for the various parameters passed to the actual plot_data(...) function
         """
         # Indicate that the data is loading
-        self.loading_label.setText("Loading Data...")
+        if not self.loading_label and not self.plot_data_button:
+            self.middle_layout.removeWidget(self.plotter_whole)
+            self.plotter_whole.deleteLater()
+            self.plotter_whole = None
+
+            self.bottom_layout.removeWidget(self.plotter_adjustable)
+            self.plotter_adjustable.deleteLater()
+            self.plotter_adjustable = None
+
+            self.slider.setValue(1)
+
         self.plot_data_button.setEnabled(False)
+        self.loading_label.setText("Loading data...")
 
         self.data_loader_thread = DataLoaderThread()
         self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
@@ -303,9 +354,8 @@ class DataLoaderThread(QThread):
         super().__init__()
 
     def run(self):
-        # Import my own functions
-        from prototype2_setup import record
-        from Neurogram_short import Recording
+
+        record = setup()
 
         channel = record.channels[0]
         start_time = None
@@ -425,6 +475,7 @@ class Plotter(QWidget):
         super().__init__()
         Plotter.data = data
         self.inner_layout = QVBoxLayout()
+        self.lower_layout = QHBoxLayout()
         self.layout = QHBoxLayout()
         self.ylim = ylim
         self.x, self.y = data[0], data[1]
@@ -517,7 +568,6 @@ class Plotter(QWidget):
 
 
         self.inner_layout.addWidget(Plotter.plot_widget_zoom)
-        self.lower_layout = QHBoxLayout()
         self.lower_layout.addWidget(self.left_button)
         self.lower_layout.addWidget(self.right_button)
 
@@ -709,6 +759,25 @@ class Plotter(QWidget):
     def keyPressEvent(cls, event):
         if cls.selected_region and event.key() == Qt.Key.Key_Delete:
             cls.delete_selected_interval()
+
+    @classmethod
+    def reset_class_attributes(cls):
+        cls.plot_widget_whole = None
+        cls.plot_widget_zoom = None
+        cls.data = None
+        cls.viewRect = QGraphicsRectItem()
+        cls.viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
+        cls.sample_rate = 100
+
+        cls.timestamps = []
+        cls.new_timestamps = []
+        cls.interval_regions = {}
+        cls.selected_region = []
+        cls.selected_interval = None
+
+        cls.entries_to_delete = set()
+
+
 
     # @classmethod
     # def mousePressEvent(self, event):
