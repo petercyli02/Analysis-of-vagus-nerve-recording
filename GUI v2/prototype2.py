@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtGui import QBrush, QColor, QAction
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QSlider, \
-    QGraphicsRectItem, QStyle, QToolBar, QCheckBox, QFileDialog
+    QGraphicsRectItem, QStyle, QToolBar, QCheckBox, QFileDialog, QDialog
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, QRectF, QTimer, QSize, QDateTime
@@ -31,7 +31,24 @@ if parent_dir not in sys.path:
 sys.path.append(parent_dir)
 
 
+def restart():
+    """Restarts the current program, with file objects and descriptors
+       cleanup
+    """
+    try:
+        # Attempt to re-execute the program using the same Python interpreter
+        os.execv(sys.executable, ['python'] + sys.argv)
+    except Exception as e:
+        # If execv fails, attempt again using a different method
+        print(f'Failed to restart the program: {e}')
+        # Fallback method for Unix
+        os.execlp('python', 'python', *sys.argv)
+
+
+
+
 class MainWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
 
@@ -78,7 +95,7 @@ class MainWindow(QMainWindow):
         load_data_action = QAction("Load Signal Data", self)
         load_data_action.triggered.connect(self.on_plot_data_button_clicked)
         self.file_menu.addAction(load_data_action)
-        open_artifact_file_action = QAction("Load Movement Data")
+        open_artifact_file_action = QAction("Load Movement Data", self)
         open_artifact_file_action.triggered.connect(self.load_movement_data)
         self.file_menu.addAction(open_artifact_file_action)
         self.save_action = QAction("Save", self)
@@ -103,6 +120,11 @@ class MainWindow(QMainWindow):
         self.show_ma_action.setCheckable(True)
         self.show_ma_action.setChecked(True)
         self.show_ma_action.toggled.connect(self.toggle_show_ma)
+        self.change_category_action = QAction("Change category", self)
+        self.toolbar.addAction(self.change_category_action)
+        self.change_category_action.triggered.connect(Plotter.change_category)
+        self.change_category_action.setEnabled(False)
+
         # self.adjust_offset_action = QAction("Show Motion Artifacts", self)
         # self.toolbar.addAction(self.adjust_offset_action)
         # self.toolbar.addSeparator()
@@ -126,28 +148,28 @@ class MainWindow(QMainWindow):
 
 
     def clear_window(self):
-        self.video_player.mediaPlayer.setSource(QUrl())
-        if self.plotter_adjustable or self.plotter_whole:
-            self.middle_layout.removeWidget(self.plotter_whole)
-            self.plotter_whole.deleteLater()
-            self.plot_widget_whole = None
-            self.bottom_layout.removeWidget(self.plotter_adjustable)
-            self.plotter_adjustable.deleteLater()
-            self.plotter_adjustable = None
+        self.close()
 
-            self.loading_label = QLabel("")
-            self.bottom_layout.addWidget(self.loading_label)
+        restart()
 
-            self.plot_data_button = QPushButton("Plot Data")
-            self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
-            self.middle_layout.addWidget(self.plot_data_button)
-
-
-            # self.plotter_adjustable.lower_layout.removeWidget(Plotter.left_button)
-            # self.plotter_adjustable.left_button.deleteLater()
-            # self.plotter_adjustable.lower_Layout.removeWidget(Plotter.right_button)
-            # self.plotter_adjustable.right_button.deleteLater()
-        Plotter.reset_class_attributes()
+        # self.video_player.mediaPlayer.setSource(QUrl())
+        #
+        # if self.plotter_adjustable or self.plotter_whole:
+        #     self.middle_layout.removeWidget(self.plotter_whole)
+        #     self.plotter_whole.deleteLater()
+        #     self.plot_widget_whole = None
+        #     self.bottom_layout.removeWidget(self.plotter_adjustable)
+        #     self.plotter_adjustable.deleteLater()
+        #     self.plotter_adjustable = None
+        #
+        #     self.loading_label = QLabel("")
+        #     self.bottom_layout.addWidget(self.loading_label)
+        #
+        #     self.plot_data_button = QPushButton("Plot Data")
+        #     self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
+        #     self.middle_layout.addWidget(self.plot_data_button)
+        #
+        # Plotter.reset_class_attributes()
 
 
     def load_movement_data(self):
@@ -156,20 +178,20 @@ class MainWindow(QMainWindow):
         with open(filepath, "r") as file:
             reader = csv.reader(file)
             for row in reader:
-                # self.timestamps.append((row[0], row[1]))
-                region_whole = ClickableLinearRegionItem(values=[(row[0], row[1])])
-                region_zoom = ClickableLinearRegionItem(values=[(row[0], row[1])])
+                region_whole = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])])
+                region_zoom = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])])
                 Plotter.interval_regions[(row[0], row[1])] = [region_whole, region_zoom]
                 if self.show_ma_action.isChecked() and Plotter.plot_widget_whole and Plotter.plot_widget_zoom:
                     Plotter.plot_widget_whole.addItem(region_whole)
                     Plotter.plot_widget_zoom.addItem(region_zoom)
 
+
     def save(self):
         with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
             writer = csv.writer(file)
-            for start, end in Plotter.new_timestamps:
+            for start, end, category in Plotter.new_timestamps:
                 # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
-                writer.writerow([start, end])
+                writer.writerow([start, end, category])
                 # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
                 # Plotter.timestamps.append((start, end))
                 # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
@@ -181,10 +203,13 @@ class MainWindow(QMainWindow):
                 interval = tuple(row)
                 if interval not in Plotter.entries_to_delete:
                     remaining_intervals.append(interval)
+                if interval in Plotter.entries_to_change:
+                    remaining_intervals.append((interval[0], interval[1], Plotter.entries_to_change[interval]))
         with open(self.current_file, 'w', newline='') as file:
             writer = csv.writer(file)
             for interval in remaining_intervals:
                 writer.writerow(interval)
+
 
     def save_as(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "CSV (*.csv)")
@@ -248,6 +273,7 @@ class MainWindow(QMainWindow):
         self.plotter_whole.plot_data_whole()
         self.middle_layout.addWidget(self.plotter_whole)
 
+
     def plot_data_adjustable(self, data, ylim=None):
         self.plotter_adjustable = Plotter(data, ylim)
         self.video_player.mediaPlayer.positionChanged.connect(self.plotter_adjustable.update_marker)
@@ -300,13 +326,18 @@ class MainWindow(QMainWindow):
         if self.plotter_adjustable and self.plotter_whole and not event.isAutoRepeat():
             if self.movement_start and event.key() == Qt.Key.Key_Space:
                 self.spacebar_mode = False
-                self.video_player.mediaPlayer.play()
                 self.movement_end = self.video_player.mediaPlayer.position() / 1000  # .position() gives the timestamp in milliseconds
                 if self.movement_end > self.movement_start:
-                    itv = (self.movement_start, self.movement_end)
-                    Plotter.timestamps.append(itv)
-                    Plotter.new_timestamps.append(itv)
-                    Plotter.add_region(itv)
+                    dialog = MovementTypeDialog()
+                    if dialog.exec():
+                        category = dialog.get_selected_category()
+                        itv = (self.movement_start, self.movement_end, MovementTypeDialog.categories[category])
+                    # Plotter.timestamps.append(itv)
+                        Plotter.new_timestamps.append(itv)
+                        Plotter.add_region(itv)
+                    self.video_player.mediaPlayer.play()
+                else:
+                    self.video_player.mediaPlayer.play()
                 self.movement_start, self.movement_end = None, None
                 self.set_marker_visibility(False)
 
@@ -336,14 +367,14 @@ class MainWindow(QMainWindow):
         self.plotter_whole.movement_start_marker.setValue(val)
 
 
-def ms_to_iso8601(ms):
-    """
-    For displaying the timestamps in milliseconds in a readable format
-    """
-    s = ms / 1000.0
-    dt = datetime.fromtimestamp(s, tz=timezone.utc)
-    # return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-    return dt.strftime('%H:%M:%S.%f')[:-3]
+# def ms_to_iso8601(ms):
+#     """
+#     For displaying the timestamps in milliseconds in a readable format
+#     """
+#     s = ms / 1000.0
+#     dt = datetime.fromtimestamp(s, tz=timezone.utc)
+#     # return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+#     return dt.strftime('%H:%M:%S.%f')[:-3]
 
 
 
@@ -441,7 +472,7 @@ class ClickableLinearRegionItem(LinearRegionItem):
 
     def hoverEvent(self, event):
         # If this region is not the selected region, process hover events normally.
-        if  not Plotter.selected_region or Plotter.selected_region[1] is not self:
+        if not Plotter.selected_region or Plotter.selected_region[1] is not self:
             super(ClickableLinearRegionItem, self).hoverEvent(event)
 
     def hoverEnterEvent(self, event):
@@ -453,6 +484,9 @@ class ClickableLinearRegionItem(LinearRegionItem):
         # If this region is not the selected region, process hover leave events normally.
         if not Plotter.selected_region or Plotter.selected_region[1] is not self:
             super(ClickableLinearRegionItem, self).hoverLeaveEvent(event)
+
+
+
 
 
 class Plotter(QWidget):
@@ -470,6 +504,7 @@ class Plotter(QWidget):
     selected_interval = None
 
     entries_to_delete = set()
+    entries_to_change = {}
 
     def __init__(self, data, ylim):
         super().__init__()
@@ -665,6 +700,7 @@ class Plotter(QWidget):
         pos = event.pos()
         for itv, reg in Plotter.interval_regions.items():
             if reg[1].getRegion()[0] < pos.x() < reg[1].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
+                self.selected_interval = itv
                 self.select_region(itv)
 
 
@@ -684,30 +720,43 @@ class Plotter(QWidget):
     @classmethod
     def select_region(cls, itv):
         if cls.selected_region:
-            cls.deselect_region()
-
-        cls.selected_region = Plotter.interval_regions[itv]
-        selected_region_brush = QBrush(QColor(0, 255, 0, 50))
-        cls.selected_region[0].setBrush(selected_region_brush)
-        cls.selected_region[1].setBrush(selected_region_brush)
-        cls.selected_region[0].update()
-        cls.selected_region[1].update()
+            colour = MovementTypeDialog.colours[itv[-1]]
+            cls.deselect_region(colour)
+        else:
+            cls.selected_interval = itv
+            cls.selected_region = Plotter.interval_regions[itv]
+            selected_region_brush = QBrush(QColor(0, 255, 0, 50))
+            cls.selected_region[0].setBrush(selected_region_brush)
+            cls.selected_region[1].setBrush(selected_region_brush)
+            cls.selected_region[0].update()
+            cls.selected_region[1].update()
+            window.change_category_action.setEnabled(True)
 
     @classmethod
-    def deselect_region(cls):
-        default_brush = QBrush(QColor(0, 0, 255, 50))
-        cls.selected_region[0].setBrush(default_brush)
-        cls.selected_region[1].setBrush(default_brush)
+    def deselect_region(cls, colour):
+        # default_brush = QBrush(QColor(0, 0, 255, 50))
+        # cls.selected_region[0].setBrush(default_brush)
+        # cls.selected_region[1].setBrush(default_brush)
+        cls.selected_region[0].setBrush(colour)
+        cls.selected_region[1].setBrush(colour)
         cls.selected_region[0].update()
         cls.selected_region[1].update()
         cls.selected_region = None
         cls.selected_interval = None
 
+        window.change_category_action.setEnabled(False)
+
+
 
 
     @classmethod
     def add_region(cls, itv):
-        region = [ClickableLinearRegionItem(values=itv), ClickableLinearRegionItem(values=itv)]
+        region_whole = ClickableLinearRegionItem(values=itv)
+        region_zoom = ClickableLinearRegionItem(values=itv)
+        brush = QBrush(QColor(MovementTypeDialog.colours[itv[2]]))
+        region_whole.setBrush(brush)
+        region_zoom.setBrush(brush)
+        region = [region_whole, region_zoom]
         cls.interval_regions[itv] = region
 
         # region[1].regionSelected.connect(cls.selected_region)
@@ -726,6 +775,7 @@ class Plotter(QWidget):
             del cls.interval_regions[cls.selected_interval]
             cls.selected_region = None
             cls.selected_interval = None
+
 
     @classmethod
     def display_intervals(cls):
@@ -777,23 +827,69 @@ class Plotter(QWidget):
 
         cls.entries_to_delete = set()
 
+    @classmethod
+    def change_category(cls):
+        if cls.selected_region:
+            dialog = MovementTypeDialog()
+            if dialog.exec():
+                category = dialog.get_selected_category()
+                cat = MovementTypeDialog.categories[category]  # Short code for categories
+                brush = QBrush(QColor(MovementTypeDialog.colours[cat]))
+
+                new_interval = (cls.selected_interval[0], cls.selected_interval[1], cat)
+
+                cls.selected_region[0].setBrush(brush)
+                cls.selected_region[1].setBrush(brush)
+                new_regions = tuple([cls.selected_region[0], cls.selected_region[1]])
+                cls.entries_to_change[cls.selected_interval] = cat
+                del cls.interval_regions[cls.selected_interval]
+                cls.interval_regions[new_interval] = new_regions
+            cls.deselect_region()
+            window.change_category_action.setEnabled(True)
 
 
-    # @classmethod
-    # def mousePressEvent(self, event):
-    #     pos = event[0].scenePos()
-    #     #
-    #     # for region in Plotter.interval_regions.values():
-    #     #     if region[1].getRegion()[0] < pos.x() < region[1].getRegion()[1]:
-    #     #         self.select_region(region)
-    #     #         return
-    #
-    #     for itv, reg in Plotter.interval_regions.items():
-    #         if reg[0].getRegion()[0] < pos.x() < reg[0].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
-    #             self.select_region(itv)
+class MovementTypeDialog(QDialog):
+
+    categories = {
+        'Stationary + clean': 's',
+        'Moving': 'm',
+        'Eating': 'e',
+        'Chewing': 'c'
+    }
+
+    colours = {
+        's': QColor(127, 88, 175, 50),#'#FE218B32',
+        'm': QColor(100, 197, 235, 50),#'#FED70032',
+        'e': QColor(232, 77, 138, 50),#'#21B0FE32',
+        'c': QColor(254, 179, 38, 50)#'#0000FF32'
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Movement Type")
+        self.selected_category = None
+
+        layout = QVBoxLayout()
+
+        for cat in self.categories:
+            btn = QPushButton(cat, self)
+            btn.clicked.connect(lambda checked, category=cat: self.select_category(category))
+            layout.addWidget(btn)
+
+        self.setLayout(layout)
+
+    def select_category(self, category):
+        self.selected_category = category
+        self.accept()
+
+    def get_selected_category(self):
+        return self.selected_category
+
 
 
 app = QApplication(sys.argv)
 window = MainWindow()
 window.show()
 sys.exit(app.exec())
+
+
