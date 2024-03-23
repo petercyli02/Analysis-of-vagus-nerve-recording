@@ -163,6 +163,10 @@ class MainWindow(QMainWindow):
         self.spacebar_mode = False
         self.rewind_speed = 200  # Each time A is pressed, rewind by ___ milliseconds
 
+    def open_dialog(self):
+        self.offset_adjuster = OffsetAdjuster(max_offset=60)
+        self.offset_adjuster.exec()
+
 
     @staticmethod
     def clear_window():
@@ -191,8 +195,7 @@ class MainWindow(QMainWindow):
         Plotter.plot_widget_whole.getPlotItem().hideAxis('bottom')
         Plotter.plot_widget_zoom.getPlotItem().hideAxis('bottom')
         # layout = QVBoxLayout()
-        self.offset_adjuster = OffsetAdjuster(max_offset=60)
-        self.offset_adjuster.exec()
+        self.open_dialog()
         # layout.addWidget(self.offset_adjuster)
         Plotter.plot_widget_whole.getPlotItem().showAxis('bottom')
         Plotter.plot_widget_zoom.getPlotItem().showAxis('bottom')
@@ -229,12 +232,14 @@ class MainWindow(QMainWindow):
                 interval = tuple(row)
                 if interval not in Plotter.entries_to_delete:
                     remaining_intervals.append(interval)
-                if interval in Plotter.entries_to_change:
+                elif interval in Plotter.entries_to_change:
                     remaining_intervals.append((interval[0], interval[1], Plotter.entries_to_change[interval]))
         with open(self.current_file, 'w', newline='') as file:
             writer = csv.writer(file)
             for interval in remaining_intervals:
                 writer.writerow(interval)
+        Plotter.entries_to_change.clear()
+        Plotter.entries_to_delete.clear()
 
 
     def save_as(self):
@@ -975,9 +980,9 @@ class Plotter(QWidget):
 
     @classmethod
     def redraw_original_plots(cls, offset_to_apply):
-        OffsetAdjuster.cancel()
+        # window.offset_adjuster.offset_dial.setValue(0)
         OffsetAdjuster.offset = 0
-        OffsetAdjuster.offset_to_apply = 0
+        # OffsetAdjuster.offset_to_apply = 0
         index_offset = int(offset_to_apply * cls.sample_rate)
 
         cls.plot_widget_whole.clear()
@@ -1054,7 +1059,6 @@ class OffsetAdjuster(QDialog):
     # offset_changed = pyqtSignal(float)
     offset = 0
     offset_to_apply = 0
-    offset_dial = QDial()
 
     def __init__(self, max_offset=60): # in seconds
         super().__init__()
@@ -1083,32 +1087,34 @@ class OffsetAdjuster(QDialog):
         self.info_label = QLabel(f"Current Offset: {OffsetAdjuster.offset_to_apply} seconds")
         self.layout.addWidget(self.info_label)
 
-        OffsetAdjuster.offset_dial.setWrapping(False)
-        OffsetAdjuster.offset_dial.setNotchesVisible(True)
-        OffsetAdjuster.offset_dial.valueChanged.connect(self.on_dial_changed)
-        OffsetAdjuster.offset_dial.setMinimum(0)
-        # self.offset_dial.setValue(0)
-        OffsetAdjuster.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
-        OffsetAdjuster.offset_dial.setMaximum(self.max_offset * 1000)
+        self.offset_dial = QDial()
+        self.offset_dial.setWrapping(False)
+        self.offset_dial.setNotchesVisible(True)
+        self.offset_dial.valueChanged.connect(self.on_dial_changed)
+        self.offset_dial.setMinimum(0)
+        self.offset_dial.setValue(0)
+        self.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
+        self.offset_dial.setMaximum(self.max_offset * 1000)
 
         self.apply_button = QPushButton("Apply")
         self.apply_button.clicked.connect(self.apply)
-        self.reset_button = QPushButton("Reset")
-        self.reset_button.clicked.connect(Plotter.redraw_original_plots)
+        # self.reset_button = QPushButton("Reset")
+        # self.reset_button.clicked.connect(Plotter.redraw_original_plots)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.clicked.connect(self.cancel)
 
         self.options_layout.addWidget(self.apply_button)
-        self.options_layout.addWidget(self.reset_button)
+        # self.options_layout.addWidget(self.reset_button)
         self.options_layout.addWidget(self.cancel_button)
 
-        self.layout.addWidget(OffsetAdjuster.offset_dial)
+        self.layout.addWidget(self.offset_dial)
         self.layout.addLayout(self.options_layout)
         self.setLayout(self.layout)
 
 
 
     def on_dial_changed(self, value):
+        print(f'Dial changed! Now offset is {value / 1000.0}')
         OffsetAdjuster.offset = value / 1000.0 #- self.original_offset
         self.info_label.setText(f"Current Offset: {OffsetAdjuster.offset} seconds")
         Plotter.adjust_plot_objects(OffsetAdjuster.offset)
@@ -1138,7 +1144,7 @@ class OffsetAdjuster(QDialog):
     #         self.info_label.setText(f"Current Offset: {self.current_offset_seconds} seconds")
     #         self.offset_changed.emit(self.current_offset_seconds)
     def cancel(self):
-        OffsetAdjuster.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
+        self.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
         Plotter.adjust_plot_objects(0)
         self.reject()
 
