@@ -1,13 +1,16 @@
+import copy
 import csv
+import subprocess
 import sys, os
 from datetime import datetime, timezone
 
+from IPython.external.qt_for_kernel import QtCore
 from PyQt6.QtGui import QBrush, QColor, QAction
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QSlider, \
-    QGraphicsRectItem, QStyle, QToolBar, QCheckBox, QFileDialog, QDialog
+    QGraphicsRectItem, QStyle, QToolBar, QCheckBox, QFileDialog, QDialog, QDial, QSizePolicy
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, QRectF, QTimer, QSize, QDateTime
+from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, QRectF, QTimer, QSize, QDateTime, QProcess
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -17,9 +20,9 @@ import numpy as np
 import time
 from Video_Player_prototype1 import VideoPlayer
 
-# Import my own functions
-from prototype2_setup import setup
-from Neurogram_short import Recording
+# # Import my own functions
+# from prototype2_setup import setup
+# from Neurogram_short import Recording
 
 
 # Add the parent directory to sys.path
@@ -36,14 +39,19 @@ def restart():
        cleanup
     """
     try:
-        # Attempt to re-execute the program using the same Python interpreter
-        os.execv(sys.executable, ['python'] + sys.argv)
+        # Note: sys.executable is the path to the Python interpreter
+        #       sys.argv[0] is the script name. It might be necessary to use the full path.
+        #       You might also need to add additional arguments depending on your application.
+        subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
     except Exception as e:
-        # If execv fails, attempt again using a different method
-        print(f'Failed to restart the program: {e}')
-        # Fallback method for Unix
-        os.execlp('python', 'python', *sys.argv)
+        print(f'Failed to restart the application: {e}')
+    finally:
+        # Exit the current application, 0 means a clean exit without error
+        sys.exit(0)
 
+    # QtCore.QCoreApplication.quit()
+    # status = QtCore.QProcess.startDetached(sys.executable, sys.argv)
+    # print(status)
 
 
 
@@ -91,6 +99,7 @@ class MainWindow(QMainWindow):
         self.file_menu = self.menu_bar.addMenu("&File")
         load_video_action = QAction("Load Video", self)
         load_video_action.triggered.connect(self.video_player.openFile)
+        # load_video_action.triggered.connect(self.video_player.)
         self.file_menu.addAction(load_video_action)
         load_data_action = QAction("Load Signal Data", self)
         load_data_action.triggered.connect(self.on_plot_data_button_clicked)
@@ -106,7 +115,7 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_as)
         self.file_menu.addAction(save_as_action)
         clear_window_action = QAction("Clear Window", self)
-        clear_window_action.triggered.connect(self.clear_window)
+        clear_window_action.triggered.connect(MainWindow.clear_window)
         self.file_menu.addAction(clear_window_action)
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
@@ -124,6 +133,14 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self.change_category_action)
         self.change_category_action.triggered.connect(Plotter.change_category)
         self.change_category_action.setEnabled(False)
+        self.adjust_offset_action = QAction("Adjust Offset", self)
+        self.adjust_offset_action.setEnabled(False)
+        self.adjust_offset_action.triggered.connect(self.open_offset_adjuster)
+        self.toolbar.addAction(self.adjust_offset_action)
+        self.reset_action = QAction("Clear Movement Data")
+        self.toolbar.addAction(self.adjust_offset_action)
+        self.reset_action.setEnabled(True)
+        self.reset_action.triggered.connect(Plotter.clear_movement_data)
 
         # self.adjust_offset_action = QAction("Show Motion Artifacts", self)
         # self.toolbar.addAction(self.adjust_offset_action)
@@ -147,11 +164,9 @@ class MainWindow(QMainWindow):
         self.rewind_speed = 200  # Each time A is pressed, rewind by ___ milliseconds
 
 
-    def clear_window(self):
-        self.close()
-
+    @staticmethod
+    def clear_window():
         restart()
-
         # self.video_player.mediaPlayer.setSource(QUrl())
         #
         # if self.plotter_adjustable or self.plotter_whole:
@@ -170,6 +185,17 @@ class MainWindow(QMainWindow):
         #     self.middle_layout.addWidget(self.plot_data_button)
         #
         # Plotter.reset_class_attributes()
+    def open_offset_adjuster(self):
+        if window.video_player.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            window.video_player.mediaPlayer.pause()
+        Plotter.plot_widget_whole.getPlotItem().hideAxis('bottom')
+        Plotter.plot_widget_zoom.getPlotItem().hideAxis('bottom')
+        # layout = QVBoxLayout()
+        self.offset_adjuster = OffsetAdjuster(max_offset=60)
+        self.offset_adjuster.exec()
+        # layout.addWidget(self.offset_adjuster)
+        Plotter.plot_widget_whole.getPlotItem().showAxis('bottom')
+        Plotter.plot_widget_zoom.getPlotItem().showAxis('bottom')
 
 
     def load_movement_data(self):
@@ -178,9 +204,9 @@ class MainWindow(QMainWindow):
         with open(filepath, "r") as file:
             reader = csv.reader(file)
             for row in reader:
-                region_whole = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])])
-                region_zoom = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])])
-                Plotter.interval_regions[(row[0], row[1])] = [region_whole, region_zoom]
+                region_whole = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])], brush=QBrush(QColor(MovementTypeDialog.colours[row[2]])))
+                region_zoom = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])], brush=QBrush(QColor(MovementTypeDialog.colours[row[2]])))
+                Plotter.interval_regions[(row[0], row[1], row[2])] = [region_whole, region_zoom]
                 if self.show_ma_action.isChecked() and Plotter.plot_widget_whole and Plotter.plot_widget_zoom:
                     Plotter.plot_widget_whole.addItem(region_whole)
                     Plotter.plot_widget_zoom.addItem(region_zoom)
@@ -265,6 +291,9 @@ class MainWindow(QMainWindow):
         self.bottom_layout.removeWidget(self.loading_label)
         self.loading_label.deleteLater()
         self.loading_label = None
+
+        if self.video_player.mediaPlayer.source is not None:
+            self.adjust_offset_action.setEnabled(True)
 
 
     def plot_data_whole(self, data, ylim=None):
@@ -385,6 +414,8 @@ class DataLoaderThread(QThread):
         super().__init__()
 
     def run(self):
+        from prototype2_setup import setup
+        from Neurogram_short import Recording
 
         record = setup()
 
@@ -506,6 +537,11 @@ class Plotter(QWidget):
     entries_to_delete = set()
     entries_to_change = {}
 
+    x_o, y_o = None, None
+
+    current_marker_whole = InfiniteLine(angle=90, movable=False, pen='r')
+    current_marker_zoom = InfiniteLine(angle=90, movable=False, pen='r')
+
     def __init__(self, data, ylim):
         super().__init__()
         Plotter.data = data
@@ -513,9 +549,11 @@ class Plotter(QWidget):
         self.lower_layout = QHBoxLayout()
         self.layout = QHBoxLayout()
         self.ylim = ylim
-        self.x, self.y = data[0], data[1]
 
-        self.current_marker = InfiniteLine(angle=90, movable=False, pen='r')
+        Plotter.x_o, Plotter.y_o = data[0], data[1]
+        self.x, self.y = self.x_o.copy(), self.y_o.copy()
+
+
         self.movement_start_marker = InfiniteLine(angle=90, movable=False, pen='#FF5C5C')
 
         self.layout.addLayout(self.inner_layout)
@@ -524,6 +562,20 @@ class Plotter(QWidget):
         self.movement_start_marker.setVisible(False)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+
+    # def adjust_dataset_for_offset(self, offset_seconds):
+    #     sample_rate = self.sample_rate
+    #     offset_samples = int(offset_seconds * sample_rate)
+    #
+    #     if offset_samples > len(self.x_o):
+    #         self.x = self.o_x[offset_samples:]
+    #         self.y = self.o_y[offset_samples:]
+    #     else:
+    #         print("Offset exceeds the dataset's length")
+    #
+    #     self.plot_data_whole()
+    #     self.plot_data_adjustable()
 
 
 
@@ -536,7 +588,7 @@ class Plotter(QWidget):
 
         self.plot = Plotter.plot_widget_whole.plot(self.x, self.y)
 
-        Plotter.plot_widget_whole.addItem(self.current_marker)
+        Plotter.plot_widget_whole.addItem(Plotter.current_marker_whole)
         Plotter.plot_widget_whole.addItem(self.movement_start_marker)
         width = self.x[-1]
         Plotter.viewRect.setRect(QRectF(0, -250, width, 500)) # Plotter.plot_widget_whole.plotItem.vb.height()))
@@ -558,7 +610,7 @@ class Plotter(QWidget):
 
         self.plot = Plotter.plot_widget_zoom.plot(self.x, self.y)
 
-        Plotter.plot_widget_zoom.addItem(self.current_marker)
+        Plotter.plot_widget_zoom.addItem(Plotter.current_marker_zoom)
         Plotter.plot_widget_zoom.addItem(self.movement_start_marker)
 
         Plotter.plot_widget_zoom.sigRangeChanged.connect(self.update_view_rect_on_zoom)
@@ -621,11 +673,6 @@ class Plotter(QWidget):
         # For selecting regions to delete/edit
         # self.proxy = SignalProxy(Plotter.plot_widget_zoom.scene().sigMouseClicked, rateLimit=60, slot=self.on_plot_clicked)
 
-    def update_marker(self, position):
-        time_in_seconds = position / 1000
-
-        self.current_marker.setValue(time_in_seconds)
-
 
     def update_view_rect(self, sliderPosition=None):
         viewRange = Plotter.plot_widget_zoom.viewRange()
@@ -646,6 +693,7 @@ class Plotter(QWidget):
     #     current_zoom = max_zoom / zoom_factor
     #     center_point = Plotter.plot_widget_zoom.plotItem.viewRange()[0][0] + current_zoom / 2
     #     Plotter.plot_widget_zoom.setXRange(center_point - current_zoom / 2, center_point + current_zoom / 2, padding=0)
+
     def update_zoom(self):
         zoom_factor = self.slider.value()
         data_min = self.x[0]  # Assuming self.x is sorted and represents your data range
@@ -698,6 +746,7 @@ class Plotter(QWidget):
         # print(type(event))
         # print("event.pos():", event.pos())
         pos = event.pos()
+        # if not Plotter.selected_interval:
         for itv, reg in Plotter.interval_regions.items():
             if reg[1].getRegion()[0] < pos.x() < reg[1].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
                 self.selected_interval = itv
@@ -717,11 +766,30 @@ class Plotter(QWidget):
     def zoom_out(self):
         self.slider.setValue(self.slider.value() - 1)
 
+
+    @classmethod
+    def update_marker(cls, position):
+        time_in_seconds = position / 1000
+        cls.current_marker_whole.setValue(time_in_seconds)
+        cls.current_marker_zoom.setValue(time_in_seconds)
+
+
+    # @classmethod
+    # def adjust_data_offset(cls, offset):
+    #     print(f"New offset is {offset} seconds")
+    #     cls.current_marker_whole.setValue(cls.current_marker_whole.value() + offset)
+    #     cls.current_marker_zoom.setValue(cls.current_marker_zoom.value() + offset)
+    #
+    #     for itv, reg in cls.interval_regions:
+    #         start, end = reg.getRegion()
+    #         reg.setRegion((start + offset, end + offset))
+
+
     @classmethod
     def select_region(cls, itv):
         if cls.selected_region:
-            colour = MovementTypeDialog.colours[itv[-1]]
-            cls.deselect_region(colour)
+            # colour = MovementTypeDialog.colours[itv[-1]]
+            cls.deselect_region()
         else:
             cls.selected_interval = itv
             cls.selected_region = Plotter.interval_regions[itv]
@@ -733,10 +801,11 @@ class Plotter(QWidget):
             window.change_category_action.setEnabled(True)
 
     @classmethod
-    def deselect_region(cls, colour):
+    def deselect_region(cls):
         # default_brush = QBrush(QColor(0, 0, 255, 50))
         # cls.selected_region[0].setBrush(default_brush)
         # cls.selected_region[1].setBrush(default_brush)
+        colour = QBrush(MovementTypeDialog.colours[cls.selected_interval[2]])
         cls.selected_region[0].setBrush(colour)
         cls.selected_region[1].setBrush(colour)
         cls.selected_region[0].update()
@@ -745,9 +814,6 @@ class Plotter(QWidget):
         cls.selected_interval = None
 
         window.change_category_action.setEnabled(False)
-
-
-
 
     @classmethod
     def add_region(cls, itv):
@@ -833,7 +899,7 @@ class Plotter(QWidget):
             dialog = MovementTypeDialog()
             if dialog.exec():
                 category = dialog.get_selected_category()
-                cat = MovementTypeDialog.categories[category]  # Short code for categories
+                cat = MovementTypeDialog.categories[category]  # Short 1-letter code for categories
                 brush = QBrush(QColor(MovementTypeDialog.colours[cat]))
 
                 new_interval = (cls.selected_interval[0], cls.selected_interval[1], cat)
@@ -844,8 +910,104 @@ class Plotter(QWidget):
                 cls.entries_to_change[cls.selected_interval] = cat
                 del cls.interval_regions[cls.selected_interval]
                 cls.interval_regions[new_interval] = new_regions
-            cls.deselect_region()
+                cls.deselect_region(brush)
             window.change_category_action.setEnabled(True)
+
+    @classmethod
+    def adjust_plot_objects(cls, offset):
+        print(f"New offset is {offset} seconds")
+
+        cls.current_marker_whole.setValue(window.video_player.mediaPlayer.position() / 1000 + offset)
+        cls.current_marker_zoom.setValue(window.video_player.mediaPlayer.position() / 1000 + offset)
+
+        for itv, reg in cls.interval_regions.items():
+            start_0, end_0 = window.offset_adjuster.interval_regions_original[itv][0]
+            start_1, end_1 = window.offset_adjuster.interval_regions_original[itv][1]
+            reg[0].setRegion((start_0 + offset, end_0 + offset))
+            reg[1].setRegion((start_1 + offset, end_1 + offset))
+
+    #
+    @classmethod
+    def redraw_plots_with_offset(cls, offset_to_apply):
+        index_offset = int(offset_to_apply * cls.sample_rate)
+
+        print("Offset to apply:", offset_to_apply)
+        print("Index offset:", index_offset)
+        if index_offset == 0:
+            cls.plot_widget_whole.clear()
+            cls.plot_widget_whole.plot(cls.x_o, cls.y_o)
+            cls.plot_widget_whole.addItem(cls.current_marker_whole)
+            cls.plot_widget_whole.addItem(window.plotter_whole.movement_start_marker)
+
+            cls.plot_widget_zoom.clear()
+            cls.plot_widget_zoom.plot(cls.x_o, cls.y_o)
+            cls.plot_widget_zoom.addItem(cls.current_marker_zoom)
+            cls.plot_widget_zoom.addItem(window.plotter_adjustable.movement_start_marker)
+
+
+        else:
+            print("Else statement!")
+            cls.plot_widget_whole.clear()
+            cls.plot_widget_whole.plot(cls.x_o[:-index_offset], cls.y_o[index_offset:])
+            cls.plot_widget_whole.addItem(cls.current_marker_whole)
+            cls.plot_widget_whole.addItem(window.plotter_whole.movement_start_marker)
+
+            cls.plot_widget_zoom.clear()
+            cls.plot_widget_zoom.plot(cls.x_o[:-index_offset], cls.y_o[index_offset:])
+            cls.plot_widget_zoom.addItem(cls.current_marker_zoom)
+            cls.plot_widget_zoom.addItem(window.plotter_adjustable.movement_start_marker)
+
+        if window.show_ma_action.isChecked():
+            cls.display_intervals()
+
+        for itv, reg in cls.interval_regions.items():
+            if reg[0].getRegion()[1] - offset_to_apply < 0:
+                cls.select_region(itv)
+                cls.delete_selected_interval()
+                continue
+
+            start_0, end_0 = reg[0].getRegion()
+            start_1, end_1 = reg[1].getRegion()
+            start_0, start_1 = max(0, start_0 - index_offset), max(0, start_1 - index_offset)
+            end_0, end_1 = end_0 - index_offset, end_1 - index_offset
+            reg[0].setRegion((start_0, end_0))
+            reg[1].setRegion((start_1, end_1))
+
+    @classmethod
+    def redraw_original_plots(cls, offset_to_apply):
+        OffsetAdjuster.cancel()
+        OffsetAdjuster.offset = 0
+        OffsetAdjuster.offset_to_apply = 0
+        index_offset = int(offset_to_apply * cls.sample_rate)
+
+        cls.plot_widget_whole.clear()
+        cls.plot_widget_whole.plot(cls.x_o, cls.y_o)
+        cls.plot_widget_whole.addItem(cls.current_marker_whole)
+        cls.plot_widget_whole.addItem(window.plotter_whole.movement_start_marker)
+
+        cls.plot_widget_zoom.clear()
+        cls.plot_widget_zoom.plot(cls.x_o, cls.y_o)
+        cls.plot_widget_zoom.addItem(cls.current_marker_zoom)
+        cls.plot_widget_zoom.addItem(window.plotter_adjustable.movement_start_marker)
+
+        if window.show_ma_action.isChecked():
+            cls.display_intervals()
+
+        for itv, reg in cls.interval_regions.items():
+            start_0, end_0 = reg[0].getRegion()
+            start_1, end_1 = reg[1].getRegion()
+            start_0, start_1 = start_0 + index_offset, start_1 + index_offset
+            end_0, end_1 = end_0 + index_offset, end_1 + index_offset
+            reg[0].setRegion((start_0, end_0))
+            reg[1].setRegion((start_1, end_1))
+
+    @classmethod
+    def clear_movement_data(cls):
+        cls.clear_intervals()
+        for itv in cls.interval_regions.keys():
+            cls.entries_to_delete.add(itv)
+        cls.interval_regions = {}
+
 
 
 class MovementTypeDialog(QDialog):
@@ -858,10 +1020,10 @@ class MovementTypeDialog(QDialog):
     }
 
     colours = {
-        's': QColor(127, 88, 175, 50),#'#FE218B32',
-        'm': QColor(100, 197, 235, 50),#'#FED70032',
-        'e': QColor(232, 77, 138, 50),#'#21B0FE32',
-        'c': QColor(254, 179, 38, 50)#'#0000FF32'
+        's': QColor(127, 88, 175, 100),#'#FE218B32',
+        'm': QColor(100, 197, 235, 100),#'#FED70032',
+        'e': QColor(232, 77, 138, 100),#'#21B0FE32',
+        'c': QColor(254, 179, 38, 100)#'#0000FF32'
     }
 
     def __init__(self, parent=None):
@@ -887,9 +1049,242 @@ class MovementTypeDialog(QDialog):
 
 
 
+
+class OffsetAdjuster(QDialog):
+    # offset_changed = pyqtSignal(float)
+    offset = 0
+    offset_to_apply = 0
+    offset_dial = QDial()
+
+    def __init__(self, max_offset=60): # in seconds
+        super().__init__()
+        self.max_offset = max_offset
+        # self.current_offset_seconds = 0
+        # self.total_offset_degrees = 0
+
+        # self.interval_regions_original = copy.deepcopy(Plotter.interval_regions)
+        self.interval_regions_original = {}
+        for itv, reg in Plotter.interval_regions.items():
+            region_copy = [reg[0].getRegion(), reg[1].getRegion()]
+            self.interval_regions_original[itv] = region_copy
+
+        # self.original_offset = 0
+
+        self.init_ui()
+
+
+    def init_ui(self):
+        print(f"\n\n\nInitialising UI\n\n\nOffset:{OffsetAdjuster.offset}\n{OffsetAdjuster.offset_to_apply}")
+        Plotter.redraw_original_plots(OffsetAdjuster.offset_to_apply)
+
+        self.layout = QVBoxLayout()
+        self.options_layout = QHBoxLayout()
+
+        self.info_label = QLabel(f"Current Offset: {OffsetAdjuster.offset_to_apply} seconds")
+        self.layout.addWidget(self.info_label)
+
+        OffsetAdjuster.offset_dial.setWrapping(False)
+        OffsetAdjuster.offset_dial.setNotchesVisible(True)
+        OffsetAdjuster.offset_dial.valueChanged.connect(self.on_dial_changed)
+        OffsetAdjuster.offset_dial.setMinimum(0)
+        # self.offset_dial.setValue(0)
+        OffsetAdjuster.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
+        OffsetAdjuster.offset_dial.setMaximum(self.max_offset * 1000)
+
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.clicked.connect(self.apply)
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.clicked.connect(Plotter.redraw_original_plots)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel)
+
+        self.options_layout.addWidget(self.apply_button)
+        self.options_layout.addWidget(self.reset_button)
+        self.options_layout.addWidget(self.cancel_button)
+
+        self.layout.addWidget(OffsetAdjuster.offset_dial)
+        self.layout.addLayout(self.options_layout)
+        self.setLayout(self.layout)
+
+
+
+    def on_dial_changed(self, value):
+        OffsetAdjuster.offset = value / 1000.0 #- self.original_offset
+        self.info_label.setText(f"Current Offset: {OffsetAdjuster.offset} seconds")
+        Plotter.adjust_plot_objects(OffsetAdjuster.offset)
+
+    def apply(self):
+        OffsetAdjuster.offset_to_apply = OffsetAdjuster.offset
+        Plotter.redraw_plots_with_offset(OffsetAdjuster.offset_to_apply)
+        Plotter.adjust_plot_objects(0)
+        self.accept()
+    # def dial_moved(self, value):
+    #     delta_degrees = value - (self.total_offset_degrees % 360)
+    #     if delta_degrees > 180:
+    #         delta_degrees -= 360
+    #     elif delta_degrees < -180:
+    #         delta_degrees += 360
+    #
+    #     self.total_offset_degrees += delta_degrees
+    #     new_offset_seconds = round(self.total_offset_degrees / 36, 3)    # 10 seconds per full spin
+    #
+    #     if new_offset_seconds < 0:
+    #         new_offset_seconds = 0
+    #     elif new_offset_seconds > self.max_offset:
+    #         new_offset_seconds = self.max_offset
+    #
+    #     if self.current_offset_seconds != new_offset_seconds:
+    #         self.current_offset_seconds = new_offset_seconds
+    #         self.info_label.setText(f"Current Offset: {self.current_offset_seconds} seconds")
+    #         self.offset_changed.emit(self.current_offset_seconds)
+    def cancel(self):
+        OffsetAdjuster.offset_dial.setValue(int(OffsetAdjuster.offset_to_apply * 1000))
+        Plotter.adjust_plot_objects(0)
+        self.reject()
+
+    # def reset(self):
+    #     self.current_offset_seconds = 0
+    #     self.total_offset_seconds = 0
+    #     self.info_label.setText(f"Current Offset: {self.current_offset_seconds} seconds")
+    #     self.offset_dial.setValue(0)
+
+    def closeEvent(self, event):
+        self.cancel()
+
+
+
+class VideoPlayer(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Simple Media Player")
+        self.setGeometry(100, 100, 800, 600)
+
+        # Set up the media player
+        self.mediaPlayer = QMediaPlayer()
+
+        # Video widget
+        self.videoWidget = QVideoWidget()
+
+        self.videoWidget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        # Play button
+        self.playButton = QPushButton()
+        self.playButton.setEnabled(False)
+        self.playButton.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.playButton.clicked.connect(self.play)
+
+        # Open button
+        self.openButton = QPushButton("Open Video")
+        self.openButton.clicked.connect(self.openFile)
+
+        # Progress slider
+        self.progressSlider = QSlider(Qt.Orientation.Horizontal)
+        self.progressSlider.setRange(0, 0)
+        self.progressSlider.sliderMoved.connect(self.setPosition)
+
+        # Playback speed slider
+        self.speedSlider = QSlider(Qt.Orientation.Horizontal)
+        self.speedSlider.setRange(25, 200)  # Representing 0.25x to 2x
+        self.speedSlider.setValue(100)  # Default speed is 1x
+        self.speedSlider.setTickInterval(25)  # Steps of 0.25x
+        self.speedSlider.sliderMoved.connect(self.setPlaybackSpeed)
+        self.speedLabel = QLabel("1x")  # Label to display the current speed
+        self.speedSlider.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
+        # Labels for current and total time
+        self.time_label = QLabel('00:00:00 / 00:00:00')
+        self.mediaPlayer.positionChanged.connect(self.update_position_label)
+        self.mediaPlayer.durationChanged.connect(self.update_duration_label)
+
+
+        # Horizontal layout for progress slider, play button, and speed slider
+        controlLayout = QHBoxLayout()
+        controlLayout.addWidget(self.playButton)
+        controlLayout.addWidget(self.time_label)
+        controlLayout.addWidget(self.speedSlider)
+        controlLayout.addWidget(self.speedLabel)
+        # controlLayout.addWidget(self.progressSlider, 8)
+        controlLayout.addStretch(1)
+
+        # Main layout
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.openButton, 0)
+        self.layout.addWidget(self.videoWidget, 2)
+        self.layout.addLayout(controlLayout, 0)
+        self.layout.addWidget(self.progressSlider, 0)
+
+        self.setLayout(self.layout)
+
+        self.mediaPlayer.setVideoOutput(self.videoWidget)
+        self.mediaPlayer.playbackStateChanged.connect(self.mediaStateChanged)
+        self.mediaPlayer.positionChanged.connect(self.positionChanged)
+        self.mediaPlayer.durationChanged.connect(self.durationChanged)
+        self.mediaPlayer.errorOccurred.connect(self.handleError)
+
+    def handleError(self):
+        print("Error occurred: ", self.mediaPlayer.errorString())
+
+    def openFile(self):
+        dialog_txt = "Choose Media File"
+        filename, _ = QFileDialog.getOpenFileName(self, dialog_txt, os.path.expanduser('~'))
+        if filename:
+            # self.layout.removeWidget(self.openButton)
+            # self.openButton.deleteLater()
+            # self.openButton = None
+            self.mediaPlayer.setSource(QUrl.fromLocalFile(filename))
+            self.playButton.setEnabled(True)
+            if window.plotter_adjustable and window.plotter_whole:
+                window.adjust_offset_action.setEnabled(True)
+            # self.mediaPlayer.play()
+
+    def play(self):
+        if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.mediaPlayer.pause()
+        else:
+            self.mediaPlayer.play()
+
+    def mediaStateChanged(self, state):
+        if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.playButton.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        else:
+            self.playButton.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+
+    def positionChanged(self, position):
+        self.progressSlider.setValue(position)
+
+    def durationChanged(self, duration):
+        self.progressSlider.setRange(0, duration)
+
+    def setPosition(self, position):
+        self.mediaPlayer.setPosition(position)
+
+    def setPlaybackSpeed(self, speed):
+        # Convert slider value to playback rate (e.g., 100 -> 1.0x speed)
+        playbackRate = speed / 100.0
+        self.mediaPlayer.setPlaybackRate(playbackRate)
+        self.speedLabel.setText(f"{playbackRate}x")
+
+    def update_position_label(self, position):
+        # Convert the position from milliseconds to hours, minutes, and seconds
+        hours, remainder = divmod(position // 1000, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        current_time = f"{hours:02}:{minutes:02}:{seconds:02}"
+        # Update the current time label
+        self.time_label.setText(f"{current_time} / {self.total_time}")
+
+    def update_duration_label(self, duration):
+        # Convert the duration from milliseconds to hours, minutes, and seconds
+        hours, remainder = divmod(duration // 1000, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        self.total_time = f"{hours:02}:{minutes:02}:{seconds:02}"
+        self.update_position_label(0)
+
+
+
 app = QApplication(sys.argv)
 window = MainWindow()
 window.show()
 sys.exit(app.exec())
-
-

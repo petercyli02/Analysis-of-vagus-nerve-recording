@@ -7,7 +7,6 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import Qt, QUrl, QDir
 from PyQt6.QtGui import QIcon, QPalette, QColor
 
-
 class VideoPlayer(QWidget):
     def __init__(self):
         super().__init__()
@@ -90,6 +89,8 @@ class VideoPlayer(QWidget):
             # self.openButton = None
             self.mediaPlayer.setSource(QUrl.fromLocalFile(filename))
             self.playButton.setEnabled(True)
+            # if window.plotter_adjustable and window.plotter_whole:
+            #     window.adjust_offset_action.setEnabled(True)
             # self.mediaPlayer.play()
 
     def play(self):
