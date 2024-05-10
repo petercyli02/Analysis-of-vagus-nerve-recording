@@ -192,13 +192,13 @@ class MainWindow(QMainWindow):
     def open_offset_adjuster(self):
         if window.video_player.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             window.video_player.mediaPlayer.pause()
-        Plotter.plot_widget_whole.getPlotItem().hideAxis('bottom')
-        Plotter.plot_widget_zoom.getPlotItem().hideAxis('bottom')
-        # layout = QVBoxLayout()
+        # Plotter.plot_widget_whole.getPlotItem().hideAxis('bottom')
+        # Plotter.plot_widget_zoom.getPlotItem().hideAxis('bottom')
+        # # layout = QVBoxLayout()
         self.open_dialog()
         # layout.addWidget(self.offset_adjuster)
-        Plotter.plot_widget_whole.getPlotItem().showAxis('bottom')
-        Plotter.plot_widget_zoom.getPlotItem().showAxis('bottom')
+        # Plotter.plot_widget_whole.getPlotItem().showAxis('bottom')
+        # Plotter.plot_widget_zoom.getPlotItem().showAxis('bottom')
 
 
     def load_movement_data(self):
@@ -218,13 +218,13 @@ class MainWindow(QMainWindow):
     def save(self):
         with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
             writer = csv.writer(file)
-            for start, end, category in Plotter.new_timestamps:
+            for start, end, category in Plotter.unsaved_intervals:
                 # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
                 writer.writerow([start, end, category])
                 # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
                 # Plotter.timestamps.append((start, end))
                 # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
-        Plotter.new_timestamps.clear()
+        Plotter.unsaved_intervals.clear()
         remaining_intervals = []
         with open(self.current_file, 'r', newline='') as file:
             reader = csv.reader(file)
@@ -367,7 +367,7 @@ class MainWindow(QMainWindow):
                         category = dialog.get_selected_category()
                         itv = (self.movement_start, self.movement_end, MovementTypeDialog.categories[category])
                     # Plotter.timestamps.append(itv)
-                        Plotter.new_timestamps.append(itv)
+                        Plotter.unsaved_intervals.append(itv)
                         Plotter.add_region(itv)
                     self.video_player.mediaPlayer.play()
                 else:
@@ -501,6 +501,7 @@ class ClickableLinearRegionItem(LinearRegionItem):
     def __init__(self, *args, **kwargs):
         super(ClickableLinearRegionItem, self).__init__(*args, **kwargs)
         self.setAcceptHoverEvents(True)
+        self.setMovable(False)
 
     def mouseClickEvent(self, event):
         self.regionSelected.emit(self)
@@ -534,7 +535,7 @@ class Plotter(QWidget):
     sample_rate = 100
 
     timestamps = []
-    new_timestamps = []
+    unsaved_intervals = []
     interval_regions = {}
     selected_region = []
     selected_interval = None
@@ -557,7 +558,6 @@ class Plotter(QWidget):
 
         Plotter.x_o, Plotter.y_o = data[0], data[1]
         self.x, self.y = self.x_o.copy(), self.y_o.copy()
-
 
         self.movement_start_marker = InfiniteLine(angle=90, movable=False, pen='#FF5C5C')
 
@@ -891,7 +891,7 @@ class Plotter(QWidget):
         cls.sample_rate = 100
 
         cls.timestamps = []
-        cls.new_timestamps = []
+        cls.unsaved_intervals = []
         cls.interval_regions = {}
         cls.selected_region = []
         cls.selected_interval = None
@@ -915,7 +915,7 @@ class Plotter(QWidget):
                 cls.entries_to_change[cls.selected_interval] = cat
                 del cls.interval_regions[cls.selected_interval]
                 cls.interval_regions[new_interval] = new_regions
-                cls.deselect_region(brush)
+                cls.deselect_region()
             window.change_category_action.setEnabled(True)
 
     @classmethod
