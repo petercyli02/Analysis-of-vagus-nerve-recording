@@ -210,36 +210,55 @@ class MainWindow(QMainWindow):
                 region_whole = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])], brush=QBrush(QColor(MovementTypeDialog.colours[row[2]])))
                 region_zoom = ClickableLinearRegionItem(values=[float(row[0]), float(row[1])], brush=QBrush(QColor(MovementTypeDialog.colours[row[2]])))
                 Plotter.interval_regions[(row[0], row[1], row[2])] = [region_whole, region_zoom]
-                if self.show_ma_action.isChecked() and Plotter.plot_widget_whole and Plotter.plot_widget_zoom:
+                if self.show_ma_action.isChecked(): # and Plotter.plot_widget_whole and Plotter.plot_widget_zoom:
                     Plotter.plot_widget_whole.addItem(region_whole)
                     Plotter.plot_widget_zoom.addItem(region_zoom)
 
 
     def save(self):
-        with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
-            writer = csv.writer(file)
-            for start, end, category in Plotter.unsaved_intervals:
-                # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
-                writer.writerow([start, end, category])
-                # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
-                # Plotter.timestamps.append((start, end))
-                # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
-        Plotter.unsaved_intervals.clear()
-        remaining_intervals = []
-        with open(self.current_file, 'r', newline='') as file:
+        intervals_to_write = set()
+        with open(self.current_file, mode='r', newline='') as file:
             reader = csv.reader(file)
             for row in reader:
-                interval = tuple(row)
-                if interval not in Plotter.entries_to_delete:
-                    remaining_intervals.append(interval)
-                elif interval in Plotter.entries_to_change:
-                    remaining_intervals.append((interval[0], interval[1], Plotter.entries_to_change[interval]))
-        with open(self.current_file, 'w', newline='') as file:
+                if tuple(row[:2]) in Plotter.entries_to_change:
+                    intervals_to_write.add(Plotter.entries_to_change[tuple(row[:2])])
+                else:
+                    intervals_to_write.add(tuple(row))
+        for itv in Plotter.unsaved_intervals:
+            intervals_to_write.add(itv)
+        for itv in Plotter.entries_to_delete:
+            intervals_to_write.remove(itv)
+        with open(self.current_file, mode='w', newline='') as file:
             writer = csv.writer(file)
-            for interval in remaining_intervals:
-                writer.writerow(interval)
+            for itv in intervals_to_write:
+                writer.writerow(itv)
+        Plotter.unsaved_intervals.clear()
         Plotter.entries_to_change.clear()
         Plotter.entries_to_delete.clear()
+        # with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
+        #     writer = csv.writer(file)
+        #     for start, end, category in Plotter.unsaved_intervals:
+        #         # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
+        #         writer.writerow([start, end, category])
+        #         # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
+        #         # Plotter.timestamps.append((start, end))
+        #         # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
+        # Plotter.unsaved_intervals.clear()
+        # remaining_intervals = []
+        # with open(self.current_file, 'r', newline='') as file:
+        #     reader = csv.reader(file)
+        #     for row in reader:
+        #         interval = tuple(row)
+        #         if interval not in Plotter.entries_to_delete:
+        #             remaining_intervals.append(interval)
+        #         elif interval in Plotter.entries_to_change:
+        #             remaining_intervals.append((interval[0], interval[1], Plotter.entries_to_change[interval]))
+        # with open(self.current_file, 'w', newline='') as file:
+        #     writer = csv.writer(file)
+        #     for interval in remaining_intervals:
+        #         writer.writerow(interval)
+        # Plotter.entries_to_change.clear()
+        # Plotter.entries_to_delete.clear()
 
 
     def save_as(self):
@@ -367,7 +386,7 @@ class MainWindow(QMainWindow):
                         category = dialog.get_selected_category()
                         itv = (self.movement_start, self.movement_end, MovementTypeDialog.categories[category])
                     # Plotter.timestamps.append(itv)
-                        Plotter.unsaved_intervals.append(itv)
+                        Plotter.unsaved_intervals.add(itv)
                         Plotter.add_region(itv)
                     self.video_player.mediaPlayer.play()
                 else:
@@ -535,13 +554,17 @@ class Plotter(QWidget):
     sample_rate = 100
 
     timestamps = []
-    unsaved_intervals = []
+    unsaved_intervals = set()
     interval_regions = {}
     selected_region = []
     selected_interval = None
 
     entries_to_delete = set()
     entries_to_change = {}
+
+    valid_intervals = []   # In case of clicking on overlapping intervals
+    prev_pos = None
+    repeated_clicks = 0
 
     x_o, y_o = None, None
 
@@ -751,11 +774,28 @@ class Plotter(QWidget):
         # print(type(event))
         # print("event.pos():", event.pos())
         pos = event.pos()
-        # if not Plotter.selected_interval:
-        for itv, reg in Plotter.interval_regions.items():
-            if reg[1].getRegion()[0] < pos.x() < reg[1].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
-                self.selected_interval = itv
-                self.select_region(itv)
+        if pos == Plotter.prev_pos:
+            itv = Plotter.valid_intervals[int(Plotter.repeated_clicks) % len(Plotter.valid_intervals)]
+            self.selected_interval = itv
+            self.select_region(itv)
+            # print("Repeated clicks:", Plotter.repeated_clicks)
+            Plotter.repeated_clicks += 0.5
+        else:
+            Plotter.prev_pos = pos
+            Plotter.repeated_clicks = 0
+            Plotter.valid_intervals = []
+            for itv, reg in Plotter.interval_regions.items():
+                if reg[1].getRegion()[0] < pos.x() < reg[1].getRegion()[1]:  # regions can only be selected from the zoomable plot, hence reg[1]
+                    Plotter.valid_intervals.append(itv)
+            # print(len(Plotter.valid_intervals))
+            # print("Valid Intervals: ", Plotter.valid_intervals)
+            itv = Plotter.valid_intervals[int(Plotter.repeated_clicks)]
+            self.selected_interval = itv
+            self.select_region(itv)
+            if len(Plotter.valid_intervals) > 1:
+                Plotter.repeated_clicks += 0.5
+
+
 
 
     def move_left(self):
@@ -822,6 +862,10 @@ class Plotter(QWidget):
 
     @classmethod
     def add_region(cls, itv):
+        Plotter.repeated_clicks = 0
+        Plotter.valid_intervals = []
+        Plotter.prev_pos = None
+
         region_whole = ClickableLinearRegionItem(values=itv)
         region_zoom = ClickableLinearRegionItem(values=itv)
         brush = QBrush(QColor(MovementTypeDialog.colours[itv[2]]))
@@ -837,15 +881,15 @@ class Plotter(QWidget):
             cls.plot_widget_zoom.addItem(region[1])
             print("Region Added, interval:", itv)
 
-    @classmethod
-    def delete_region(cls):
-        if cls.selected_region:
-            cls.plot_widget_whole.removeItem(cls.selected_region[0])
-            cls.plot_widget_zoom.removeItem(cls.selected_region[1])
-            cls.entries_to_delete.add(cls.selected_interval)
-            del cls.interval_regions[cls.selected_interval]
-            cls.selected_region = None
-            cls.selected_interval = None
+    # @classmethod
+    # def delete_region(cls):
+    #     if cls.selected_region:
+    #         cls.plot_widget_whole.removeItem(cls.selected_region[0])
+    #         cls.plot_widget_zoom.removeItem(cls.selected_region[1])
+    #         cls.entries_to_delete.add(cls.selected_interval)
+    #         del cls.interval_regions[cls.selected_interval]
+    #         cls.selected_region = None
+    #         cls.selected_interval = None
 
 
     @classmethod
@@ -865,15 +909,25 @@ class Plotter(QWidget):
     @classmethod
     def delete_selected_interval(cls):
         if cls.selected_region:
+            Plotter.repeated_clicks = 0
+            Plotter.valid_intervals = []
+            Plotter.prev_pos = None
+
             Plotter.plot_widget_whole.removeItem(cls.selected_region[0])
             Plotter.plot_widget_zoom.removeItem(cls.selected_region[1])
-            interval_to_remove = None
+            # interval_to_remove = None
             for itv, region in Plotter.interval_regions.items():
                 if region == cls.selected_region:
-                    interval_to_remove = itv
-                break
-            if interval_to_remove:
-                del cls.interval_regions[interval_to_remove]
+                    del cls.interval_regions[itv]
+                    if itv in cls.unsaved_intervals:
+                        cls.unsaved_intervals.remove(itv)
+                    else:
+                        cls.entries_to_delete.add(itv)
+                    # interval_to_remove = itv
+                    break
+            # if interval_to_remove:
+            #     del cls.interval_regions[interval_to_remove]
+            cls.selected_interval = None
             cls.selected_region = None
 
     @classmethod
@@ -891,7 +945,7 @@ class Plotter(QWidget):
         cls.sample_rate = 100
 
         cls.timestamps = []
-        cls.unsaved_intervals = []
+        cls.unsaved_intervals = set()
         cls.interval_regions = {}
         cls.selected_region = []
         cls.selected_interval = None
@@ -911,12 +965,12 @@ class Plotter(QWidget):
 
                 cls.selected_region[0].setBrush(brush)
                 cls.selected_region[1].setBrush(brush)
-                new_regions = tuple([cls.selected_region[0], cls.selected_region[1]])
-                cls.entries_to_change[cls.selected_interval] = cat
+                new_regions = [cls.selected_region[0], cls.selected_region[1]]
+                cls.entries_to_change[cls.selected_interval[:2]] = new_interval
                 del cls.interval_regions[cls.selected_interval]
                 cls.interval_regions[new_interval] = new_regions
                 cls.deselect_region()
-            window.change_category_action.setEnabled(True)
+            window.change_category_action.setEnabled(False)
 
     @classmethod
     def adjust_plot_objects(cls, offset):
