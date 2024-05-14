@@ -59,7 +59,8 @@ if parent_dir not in sys.path:
 
 
 print("Setup started...")
-print("------------------------------------------------------\n\n\n\n\n")
+print("------------------------------------------------------")
+print("\n\n\n\n\n")
 
 # Own libraries
 from Neurogram_short import * # Recording, MyWavelet, MyWaveforms

@@ -33,21 +33,6 @@ if parent_dir not in sys.path:
 sys.path.append(parent_dir)
 
 
-def restart():
-    """Restarts the current program, with file objects and descriptors
-       cleanup
-    """
-    try:
-        # Note: sys.executable is the path to the Python interpreter
-        #       sys.argv[0] is the script name. It might be necessary to use the full path.
-        #       You might also need to add additional arguments depending on your application.
-        subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
-    except Exception as e:
-        print(f'Failed to restart the application: {e}')
-    finally:
-        # Exit the current application, 0 means a clean exit without error
-        sys.exit(0)
-
 
 class MainWindow(QMainWindow):
 
@@ -76,11 +61,12 @@ class MainWindow(QMainWindow):
         self.plot_data_button = QPushButton("Plot Data")
         self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
 
-        self.loading_label = QLabel("")
+        self.loading_label = QLabel("\n\n\n\n\n\nLoading Data...")
+        self.loading_label.setVisible(False)
 
         self.top_layout.addWidget(self.video_player)
         self.bottom_centre_top_layout.addWidget(self.plot_data_button)
-        self.bottom_centre_bottom_layout.addWidget(self.loading_label)
+        self.bottom_centre_top_layout.addWidget(self.loading_label)
 
         self.main_layout = QVBoxLayout()
         self.main_layout.addLayout(self.top_layout, 1)
@@ -151,14 +137,13 @@ class MainWindow(QMainWindow):
         self.adjust_offset_action.triggered.connect(self.open_offset_adjuster)
         self.toolbar.addAction(self.adjust_offset_action)
         self.reset_action = QAction("Clear Category Data")
-        self.reset_action.setEnabled(True)
+        self.reset_action.setEnabled(False)
         self.reset_action.triggered.connect(Plotter.clear_data)
         self.toolbar.addAction(self.reset_action)
         self.toggle_glucose_action = QAction("Show Glucose Data")
         self.toggle_glucose_action.setEnabled(False)
         self.toggle_glucose_action.triggered.connect(self.toggle_glucose_data)
         self.toolbar.addAction(self.toggle_glucose_action)
-
 
         # So that the KeyPressEvent and KeyReleaseEvent overrides work fine
         self.plotter_adjustable = None
@@ -196,6 +181,10 @@ class MainWindow(QMainWindow):
         self.left_button.setVisible(False)
         self.right_button.setVisible(False)
 
+        # Initialising the data loader thread object
+        self.data_loader_thread = DataLoaderThread()
+        self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
+
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def open_dialog(self):
@@ -203,39 +192,10 @@ class MainWindow(QMainWindow):
         self.offset_adjuster.exec()
 
 
-        # Plotter.reset_class_attributes()
-        # restart()
-
-
-        # self.video_player.mediaPlayer.setSource(QUrl())
-        #
-        # if self.plotter_adjustable or self.plotter_whole:
-        #     self.mid_upper_layout.removeWidget(self.plotter_whole)
-        #     self.plotter_whole.deleteLater()
-        #     self.plot_widget_whole = None
-        #     self.mid_lower_layout.removeWidget(self.plotter_adjustable)
-        #     self.plotter_adjustable.deleteLater()
-        #     self.plotter_adjustable = None
-        #
-        #     self.loading_label = QLabel("")
-        #     self.mid_lower_layout.addWidget(self.loading_label)
-        #
-        #     self.plot_data_button = QPushButton("Plot Data")
-        #     self.plot_data_button.clicked.connect(self.on_plot_data_button_clicked)
-        #     self.mid_upper_layout.addWidget(self.plot_data_button)
-        #
-        # Plotter.reset_class_attributes()
-
     def open_offset_adjuster(self):
         if window.video_player.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             window.video_player.mediaPlayer.pause()
-        # Plotter.plot_widget_whole.getPlotItem().hideAxis('bottom')
-        # Plotter.plot_widget_zoom.getPlotItem().hideAxis('bottom')
-        # # layout = QVBoxLayout()
         self.open_dialog()
-        # layout.addWidget(self.offset_adjuster)
-        # Plotter.plot_widget_whole.getPlotItem().showAxis('bottom')
-        # Plotter.plot_widget_zoom.getPlotItem().showAxis('bottom')
 
 
     def load_movement_data(self):
@@ -273,30 +233,6 @@ class MainWindow(QMainWindow):
         Plotter.unsaved_intervals.clear()
         Plotter.entries_to_change.clear()
         Plotter.entries_to_delete.clear()
-        # with open(self.current_file, 'a' if self.current_file else 'w', newline='') as file:
-        #     writer = csv.writer(file)
-        #     for start, end, category in Plotter.unsaved_intervals:
-        #         # writer.writerow([start.toString(Qt.ISODateWithMs), end.toString(Qt.ISODateWithMs)])
-        #         writer.writerow([start, end, category])
-        #         # writer.writerow([ms_to_iso8601(start), ms_to_iso8601(end)])
-        #         # Plotter.timestamps.append((start, end))
-        #         # Plotter.interval_regions[(start, end)] = ClickableLinearRegionItem(values=[start, end])
-        # Plotter.unsaved_intervals.clear()
-        # remaining_intervals = []
-        # with open(self.current_file, 'r', newline='') as file:
-        #     reader = csv.reader(file)
-        #     for row in reader:
-        #         interval = tuple(row)
-        #         if interval not in Plotter.entries_to_delete:
-        #             remaining_intervals.append(interval)
-        #         elif interval in Plotter.entries_to_change:
-        #             remaining_intervals.append((interval[0], interval[1], Plotter.entries_to_change[interval]))
-        # with open(self.current_file, 'w', newline='') as file:
-        #     writer = csv.writer(file)
-        #     for interval in remaining_intervals:
-        #         writer.writerow(interval)
-        # Plotter.entries_to_change.clear()
-        # Plotter.entries_to_delete.clear()
 
 
     def save_as(self):
@@ -322,7 +258,11 @@ class MainWindow(QMainWindow):
         For now, manually specifies values for the various parameters passed to the actual plot_data(...) function
         """
         # Indicate that the data is loading
-        if not self.loading_label and not self.plot_data_button:
+        if not self.plotter_whole:
+            self.plot_data_button.setEnabled(False)
+            self.data_loader_thread.start()
+
+        else:
             self.bottom_centre_top_layout.removeWidget(self.plotter_whole)
             self.plotter_whole.deleteLater()
             self.plotter_whole = None
@@ -331,14 +271,14 @@ class MainWindow(QMainWindow):
             self.plotter_adjustable.deleteLater()
             self.plotter_adjustable = None
 
+            self.left_button.setVisible(False)
+            self.right_button.setVisible(False)
+            self.slider.setVisible(False)
             self.slider.setValue(1)
 
-        self.plot_data_button.setEnabled(False)
-        self.loading_label.setText("Loading data...")
+            self.data_loader_thread.start()
 
-        self.data_loader_thread = DataLoaderThread()
-        self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
-        self.data_loader_thread.start()
+        self.loading_label.setVisible(True)
 
 
 
@@ -351,14 +291,13 @@ class MainWindow(QMainWindow):
         self.plot_data_button.deleteLater()
         self.plot_data_button = None
 
-        self.bottom_centre_top_layout.removeWidget(self.loading_label)
-        self.loading_label.deleteLater()
-        self.loading_label = None
+        self.loading_label.setVisible(False)
 
         if self.video_player.mediaPlayer.source is not None:
             self.adjust_offset_action.setEnabled(True)
 
         self.slider.setVisible(True)
+        self.reset_action.setEnabled(True)
 
 
     def plot_data_whole(self, data, ylim=None):
@@ -390,19 +329,6 @@ class MainWindow(QMainWindow):
         visibility = self.glucose_plotter_whole.isVisible()
         self.glucose_plotter_whole.setVisible(not visibility)
 
-        # if self.show_glucose_plot is True:
-        #     self.bottom_upper_layout.removeWidget(self.glucose_plotter_whole)
-        #     self.glucose_plotter_whole.deleteLater()
-        #     self.glucose_plotter_whole = None
-        #     self.bottom_lower_layout.removeWidget(self.glucose_plotter_adjustable)
-        #     self.glucose_plotter_adjustable.deleteLater()
-        #     self.glucose_plotter_adjustable = None
-        #     self.show_glucose_plot = False
-        # else:
-        #     self.load_glucose_plot()
-        #     self.bottom_upper_layout.addWidget(self.glucose_plotter_whole)
-        #     self.bottom_lower_layout.addWidget(self.glucose_plotter_adjustable)
-        #     self.show_glucose_plot = True
 
     def load_glucose_plot(self):
         self.toggle_glucose_action.setEnabled(False)
@@ -441,14 +367,10 @@ class MainWindow(QMainWindow):
             elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
                 self.video_player.mediaPlayer.play()
             elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
-                # self.video_player.mediaPlayer.setPlaybackRate(-1 * self.video_player.mediaPlayer.playbackRate())
-                # self.video_player.mediaPlayer.play()
                 self.video_player.mediaPlayer.setPosition(max(0, self.video_player.mediaPlayer.position() - self.rewind_speed))
                 if self.video_player.mediaPlayer.position() < 1000 * self.movement_start:
-                    # print("Video player position:", self.video_player.mediaPlayer.position())
                     self.movement_start = self.video_player.mediaPlayer.position() / 1000.0
                     self.set_marker_value(self.video_player.mediaPlayer.position() / 1000.0)
-                    # print("Start marker position:", self.plotter_adjustable.movement_start_marker.value())
 
             elif event.key() == Qt.Key.Key_Left:
                 self.left_timer.start()
@@ -460,11 +382,6 @@ class MainWindow(QMainWindow):
                 self.plotter_adjustable.zoom_out_timer.start()
             elif Plotter.selected_region and event.key() == Qt.Key.Key_Delete:
                 Plotter.delete_selected_interval()
-
-            # elif event.key() == Qt.Key.Key_H:
-            #     for i in range(10):
-            #         testRegion = ClickableLinearRegionItem(values=(10*i, 10*i + 50))
-            #         Plotter.plot_widget_whole.addItem(testRegion)
             else:
                 super().keyPressEvent(event)
 
@@ -488,9 +405,6 @@ class MainWindow(QMainWindow):
                 self.movement_start, self.movement_end = None, None
                 self.set_marker_visibility(False)
 
-            # elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
-            #     self.video_player.mediaPlayer.pause()
-                # self.video_player.mediaPlayer.setPlaybackRate(-1 * self.video_player.mediaPlayer.playbackRate())
             elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
                 self.video_player.mediaPlayer.pause()
 
@@ -512,16 +426,6 @@ class MainWindow(QMainWindow):
     def set_marker_value(self, val):
         self.plotter_adjustable.movement_start_marker.setValue(val)
         self.plotter_whole.movement_start_marker.setValue(val)
-
-
-# def ms_to_iso8601(ms):
-#     """
-#     For displaying the timestamps in milliseconds in a readable format
-#     """
-#     s = ms / 1000.0
-#     dt = datetime.fromtimestamp(s, tz=timezone.utc)
-#     # return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-#     return dt.strftime('%H:%M:%S.%f')[:-3]
 
 
 
@@ -662,7 +566,6 @@ class Plotter(QWidget):
         self.layout = QHBoxLayout()
         self.ylim = ylim
 
-        # self.x, self.y = self.x_o.copy(), self.y_o.copy()
         self.x, self.y = data[0], data[1]
 
         self.movement_start_marker = InfiniteLine(angle=90, movable=False, pen='#FF5C5C')
@@ -679,7 +582,7 @@ class Plotter(QWidget):
         Plotter.plot_widget_whole.addItem(Plotter.current_marker_whole)
         Plotter.plot_widget_whole.addItem(self.movement_start_marker)
         width = self.x[-1]
-        Plotter.viewRect.setRect(QRectF(0, -250, width, 500)) # Plotter.plot_widget_whole.plotItem.vb.height()))
+        Plotter.viewRect.setRect(QRectF(0, -250, width, 500))
         Plotter.plot_widget_whole.plotItem.vb.addItem(Plotter.viewRect)
 
         Plotter.plot_widget_whole.setYRange(-250, 250)
@@ -688,8 +591,11 @@ class Plotter(QWidget):
 
 
     def plot_glucose_whole(self):
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')
+        pen = pg.mkPen(width=10, color='k')
         Plotter.plot_widget_glucose = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
-        self.plot = Plotter.plot_widget_glucose.plot(self.x, self.y)
+        self.plot = Plotter.plot_widget_glucose.plot(self.x, self.y, pen=pen)
 
         Plotter.plot_widget_glucose.addItem(Plotter.current_marker_glucose)
         width = self.x[-1]
@@ -726,7 +632,6 @@ class Plotter(QWidget):
         self.zoom_out_timer = QTimer()
         self.zoom_out_timer.timeout.connect(self.zoom_out)
         self.zoom_out_timer.setInterval(50)
-
 
         self.layout.addWidget(Plotter.plot_widget_zoom)
 
@@ -1110,7 +1015,6 @@ class MovementTypeDialog(QDialog):
 
 
 
-
 class OffsetAdjuster(QDialog):
     offset = 0
     offset_to_apply = 0
@@ -1261,6 +1165,9 @@ class VideoPlayer(QWidget):
             self.playButton.setEnabled(True)
             if window.plotter_adjustable and window.plotter_whole:
                 window.adjust_offset_action.setEnabled(True)
+        self.openButton.setVisible(False)
+        self.mediaPlayer.play()
+        self.mediaPlayer.pause()
 
     def play(self):
         if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -1305,6 +1212,22 @@ class VideoPlayer(QWidget):
 
         self.total_time = f"{hours:02}:{minutes:02}:{seconds:02}"
         self.update_position_label(0)
+
+
+def restart():
+    """Restarts the current program, with file objects and descriptors
+       cleanup
+    """
+    try:
+        # Note: sys.executable is the path to the Python interpreter
+        #       sys.argv[0] is the script name. It might be necessary to use the full path.
+        #       You might also need to add additional arguments depending on your application.
+        subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
+    except Exception as e:
+        print(f'Failed to restart the application: {e}')
+    finally:
+        # Exit the current application, 0 means a clean exit without error
+        sys.exit(0)
 
 
 
