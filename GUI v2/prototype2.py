@@ -276,7 +276,7 @@ class MainWindow(QMainWindow):
             self.slider.setVisible(False)
             self.slider.setValue(1)
 
-            self.data_loader_thread.start()
+            self.data_loader_thread.rerun()
 
         self.loading_label.setVisible(True)
 
@@ -284,12 +284,14 @@ class MainWindow(QMainWindow):
 
     def on_data_loaded(self, data):
         Plotter.x_o, Plotter.y_o = data[0], data[1]
+
+        if self.plotter_whole is None:
+            self.bottom_centre_top_layout.removeWidget(self.plot_data_button)
+            self.plot_data_button.deleteLater()
+            self.plot_data_button = None
+
         self.plot_data_whole(data, ylim=(-250, 250))
         self.plot_data_adjustable(data, ylim=(-250, 250))
-
-        self.bottom_centre_top_layout.removeWidget(self.plot_data_button)
-        self.plot_data_button.deleteLater()
-        self.plot_data_button = None
 
         self.loading_label.setVisible(False)
 
@@ -438,8 +440,14 @@ class DataLoaderThread(QThread):
     def run(self):
         from prototype2_setup import setup
         from Neurogram_short import Recording
+        self.setup = setup
+        self.load()
 
-        record = setup()
+    def setup(self):
+        pass
+
+    def load(self):
+        record = self.setup()
 
         channel = record.channels[0]
         start_time = None
@@ -471,6 +479,9 @@ class DataLoaderThread(QThread):
         self.y = record.filtered['ch_%s' % channel][self.x_range]
 
         self.data_loaded.emit((self.x, self.y))
+
+    def rerun(self):
+        self.load()
 
 
 

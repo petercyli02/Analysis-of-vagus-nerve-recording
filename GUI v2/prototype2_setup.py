@@ -45,6 +45,10 @@ from scipy import ndimage
 from tkinter import Tk     # from tkinter import Tk for Python 3.x
 from tkinter.filedialog import askdirectory
 
+from PyQt6.QtWidgets import QApplication, QFileDialog
+
+
+
 # Add my module to python path
 sys.path.append("../")
 
@@ -98,7 +102,7 @@ def setup():
     port = 'Port A'  # Select port A or B for different recordings
     record = Recording.open_record(path, start=start, dur=dur,
                                    load_from_file=load_from_file,
-                                   load_multiple_files=True,
+                                   load_multiple_files=False,
                                    downsample=downsample,
                                    port=port,  # Select recording port
                                    map_path=map_path,

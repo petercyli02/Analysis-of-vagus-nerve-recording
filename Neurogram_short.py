@@ -44,6 +44,9 @@ from scipy import ndimage
 from tkinter import Tk  # from tkinter import Tk for Python 3.x
 from tkinter.filedialog import askopenfile
 
+from PyQt6.QtWidgets import QApplication, QFileDialog
+
+
 # Add my module to python path
 sys.path.append("../")
 
@@ -603,9 +606,14 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
     print(path)
     # If data has been previously stored
     if load_from_file:
+
         filepath = askopenfile(initialdir=path, title="Select previously stored data file",
                                filetypes=[("recording", ".csv .pkl")])
         filepath = filepath.name
+        print("Selecting file...")
+        # filepath, _ = QFileDialog.getOpenFileName(None, "Select previously stored data file", path,
+        #                                           "Pickle files (*.pkl);;CSV files (*.csv);;All files (*.*)")
+
         print('Loading from file %s' % filepath)
         channels = []
         # Load from csv: computationally expensive
@@ -674,9 +682,6 @@ def load_data_multich(path, start=0, dur=None, port='Port B', load_from_file=Fal
                 print(channels)
                 basename_without_ext = os.path.splitext(os.path.basename(filepath))[0]
             else:
-
-
-
                 print('ERROR: You have selected a wrong file, try again')
                 sys.exit()
 
