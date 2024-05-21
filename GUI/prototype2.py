@@ -1,9 +1,11 @@
 import copy
 import csv
+import json
 import subprocess
 import sys, os
 from datetime import datetime, timezone
 
+import pandas as pd
 import pyqtgraph
 from numpy.typing import NDArray
 
@@ -21,7 +23,9 @@ import pyqtgraph as pg
 from pyqtgraph import AxisItem, ImageItem, InfiniteLine, PlotDataItem, ViewBox, LinearRegionItem, SignalProxy
 import numpy as np
 import time
-from Video_Player_prototype1 import VideoPlayer
+
+from Data_Loading import Recording
+from additional_functions import convertDfType
 
 
 # Add the parent directory to sys.path
@@ -35,6 +39,7 @@ sys.path.append(parent_dir)
 
 
 class MainWindow(QMainWindow):
+    signal_filepath = None
 
     def __init__(self):
         super().__init__()
@@ -86,8 +91,6 @@ class MainWindow(QMainWindow):
 
         self.bottom_right_layout.addWidget(self.slider)
 
-        self.show_glucose_plot = False
-
         self.central_widget = QWidget()
         self.central_widget.setLayout(self.main_layout)
         self.setCentralWidget(self.central_widget)
@@ -118,6 +121,8 @@ class MainWindow(QMainWindow):
         self.load_glucose_action.setEnabled(False)
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
+        self.settings_menu.setEnabled(False)
+        self.settings_menu.setToolTip("To be developed - will enable editing of movement speed, region colours, default ylims etc")
 
         self.toolbar = QToolBar("Main Toolbar")
         self.toolbar.setIconSize(QSize(50, 50))
@@ -144,6 +149,8 @@ class MainWindow(QMainWindow):
         self.toggle_glucose_action.setEnabled(False)
         self.toggle_glucose_action.triggered.connect(self.toggle_glucose_data)
         self.toolbar.addAction(self.toggle_glucose_action)
+
+        self.glucose_plotter_whole = None
 
         # So that the KeyPressEvent and KeyReleaseEvent overrides work fine
         self.plotter_adjustable = None
@@ -185,7 +192,12 @@ class MainWindow(QMainWindow):
         self.data_loader_thread = DataLoaderThread()
         self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
 
+        self.rewind_timer = QTimer()
+        self.rewind_timer.timeout.connect(self.rewind)
+        self.rewind_timer.setInterval(100)
+
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
 
     def open_dialog(self):
         self.offset_adjuster = OffsetAdjuster(max_offset=60)
@@ -214,13 +226,16 @@ class MainWindow(QMainWindow):
 
     def save(self):
         intervals_to_write = set()
-        with open(self.current_file, mode='r', newline='') as file:
-            reader = csv.reader(file)
-            for row in reader:
-                if tuple(row[:2]) in Plotter.entries_to_change:
-                    intervals_to_write.add(Plotter.entries_to_change[tuple(row[:2])])
-                else:
-                    intervals_to_write.add(tuple(row))
+        try:
+            with open(self.current_file, mode='r', newline='') as file:
+                reader = csv.reader(file)
+                for row in reader:
+                    if tuple(row[:2]) in Plotter.entries_to_change:
+                        intervals_to_write.add(Plotter.entries_to_change[tuple(row[:2])])
+                    else:
+                        intervals_to_write.add(tuple(row))
+        except FileNotFoundError:
+            pass
         for itv in Plotter.unsaved_intervals:
             intervals_to_write.add(itv)
         for itv in Plotter.entries_to_delete:
@@ -238,6 +253,8 @@ class MainWindow(QMainWindow):
     def save_as(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "CSV (*.csv)")
         if file_path:
+            if not file_path.endswith('.csv'):
+                file_path += '.csv'
             self.current_file = file_path
             self.save()
             self.save_action.setEnabled(True)
@@ -258,9 +275,17 @@ class MainWindow(QMainWindow):
         For now, manually specifies values for the various parameters passed to the actual plot_data(...) function
         """
         # Indicate that the data is loading
+        MainWindow.signal_filepath, _ = QFileDialog.getOpenFileName(self, "Select previously stored data file", os.path.expanduser('~'),
+                                                  "Pickle files (*.pkl)")
+
+        if self.glucose_plotter_whole is not None:
+            self.toggle_glucose_action.setEnabled(False)
+            self.bottom_centre_top_layout.removeWidget(self.glucose_plotter_whole)
+            self.glucose_plotter_whole.deleteLater()
+            self.glucose_plotter_whole = None
+
         if not self.plotter_whole:
             self.plot_data_button.setEnabled(False)
-            self.data_loader_thread.start()
 
         else:
             self.bottom_centre_top_layout.removeWidget(self.plotter_whole)
@@ -276,16 +301,17 @@ class MainWindow(QMainWindow):
             self.slider.setVisible(False)
             self.slider.setValue(1)
 
-            self.data_loader_thread.rerun()
-
+        self.data_loader_thread.start()
         self.loading_label.setVisible(True)
 
 
-
     def on_data_loaded(self, data):
+        Plotter.reset_class_attributes()
+        pg.setConfigOption('background', 'k')
+        pg.setConfigOption('foreground', 'w')
         Plotter.x_o, Plotter.y_o = data[0], data[1]
 
-        if self.plotter_whole is None:
+        if self.plot_data_button is not None:
             self.bottom_centre_top_layout.removeWidget(self.plot_data_button)
             self.plot_data_button.deleteLater()
             self.plot_data_button = None
@@ -303,21 +329,19 @@ class MainWindow(QMainWindow):
 
 
     def plot_data_whole(self, data, ylim=None):
-        self.plotter_whole = Plotter(data, ylim)
-        self.video_player.mediaPlayer.positionChanged.connect(self.plotter_whole.update_marker)
+        if not self.plotter_whole:
+            self.plotter_whole = Plotter(data, ylim)
+        self.video_player.mediaPlayer.positionChanged.connect(Plotter.update_marker)
         self.plotter_whole.plot_data_whole()
         self.bottom_centre_top_layout.addWidget(self.plotter_whole)
         self.bottom_centre_top_layout.setStretch(0, 1)
 
 
     def plot_data_adjustable(self, data, ylim=None):
-        # print("Data:")
-        # print(data[0])
-        # print(data[1], "\n\n\n\n\n")
-        self.plotter_adjustable = Plotter(data, ylim)
+        if not self.plotter_adjustable:
+            self.plotter_adjustable = Plotter(data, ylim)
         self.xlim_vagus = [data[0][0], data[0][-1]]
-        # print(f"\n\n\n{self.xlim_vagus}\n\n\n")
-        self.video_player.mediaPlayer.positionChanged.connect(self.plotter_adjustable.update_marker)
+        self.video_player.mediaPlayer.positionChanged.connect(Plotter.update_marker)
         self.plotter_adjustable.plot_data_adjustable()
         self.bottom_centre_top_layout.addWidget(self.plotter_adjustable)
         self.bottom_centre_top_layout.setStretch(0, 1)
@@ -333,6 +357,10 @@ class MainWindow(QMainWindow):
 
 
     def load_glucose_plot(self):
+        if self.glucose_plotter_whole is not None:
+            self.bottom_centre_top_layout.removeWidget(self.glucose_plotter_whole)
+            self.glucose_plotter_whole.deleteLater()
+            self.glucose_plotter_whole = None
         self.toggle_glucose_action.setEnabled(False)
         dialog_txt = "Select File Containing Glucose Data"
         filepath = QFileDialog.getOpenFileName(self, dialog_txt, os.path.expanduser('~'), "CSV Files (*.csv)")[0]
@@ -350,11 +378,10 @@ class MainWindow(QMainWindow):
 
     def plot_glucose_whole(self, data):
         self.glucose_plotter_whole = Plotter(data, ylim=(0, 200))
-        self.video_player.mediaPlayer.positionChanged.connect(self.glucose_plotter_whole.update_marker)
-        self.glucose_plotter_whole.plot_glucose_whole()
+        self.video_player.mediaPlayer.positionChanged.connect(Plotter.update_marker)
         self.bottom_centre_top_layout.addWidget(self.glucose_plotter_whole)
+        self.glucose_plotter_whole.plot_glucose_whole()
         self.glucose_plotter_whole.setVisible(True)
-
 
     def keyPressEvent(self, event):
         if self.plotter_adjustable and self.plotter_whole and not event.isAutoRepeat():
@@ -369,11 +396,13 @@ class MainWindow(QMainWindow):
             elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
                 self.video_player.mediaPlayer.play()
             elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
-                self.video_player.mediaPlayer.setPosition(max(0, self.video_player.mediaPlayer.position() - self.rewind_speed))
-                if self.video_player.mediaPlayer.position() < 1000 * self.movement_start:
-                    self.movement_start = self.video_player.mediaPlayer.position() / 1000.0
-                    self.set_marker_value(self.video_player.mediaPlayer.position() / 1000.0)
-
+                self.rewind_timer.start()
+                # self.video_player.mediaPlayer.setPosition(max(0, self.video_player.mediaPlayer.position() - self.rewind_speed))
+                # if self.video_player.mediaPlayer.position() < 1000 * self.movement_start:
+                #     self.movement_start = self.video_player.mediaPlayer.position() / 1000.0
+                #     self.set_marker_value(self.video_player.mediaPlayer.position() / 1000.0)
+            elif event.key() == Qt.Key.Key_P:
+                self.video_player.play()
             elif event.key() == Qt.Key.Key_Left:
                 self.left_timer.start()
             elif event.key() == Qt.Key.Key_Right:
@@ -390,15 +419,16 @@ class MainWindow(QMainWindow):
 
     def keyReleaseEvent(self, event):
         if self.plotter_adjustable and self.plotter_whole and not event.isAutoRepeat():
-            if self.movement_start and event.key() == Qt.Key.Key_Space:
+            if self.spacebar_mode and event.key() == Qt.Key.Key_Space:
                 self.spacebar_mode = False
+                if self.video_player.mediaPlayer.isPlaying():
+                    self.video_player.mediaPlayer.pause()
                 self.movement_end = self.video_player.mediaPlayer.position() / 1000  # .position() gives the timestamp in milliseconds
                 if self.movement_end > self.movement_start:
                     dialog = MovementTypeDialog()
                     if dialog.exec():
                         category = dialog.get_selected_category()
                         itv = (self.movement_start, self.movement_end, MovementTypeDialog.categories[category])
-                    # Plotter.timestamps.append(itv)
                         Plotter.unsaved_intervals.add(itv)
                         Plotter.add_region(itv)
                     self.video_player.mediaPlayer.play()
@@ -407,6 +437,8 @@ class MainWindow(QMainWindow):
                 self.movement_start, self.movement_end = None, None
                 self.set_marker_visibility(False)
 
+            elif self.spacebar_mode and event.key() == Qt.Key.Key_A:
+                self.rewind_timer.stop()
             elif self.spacebar_mode and event.key() == Qt.Key.Key_D:
                 self.video_player.mediaPlayer.pause()
 
@@ -429,6 +461,13 @@ class MainWindow(QMainWindow):
         self.plotter_adjustable.movement_start_marker.setValue(val)
         self.plotter_whole.movement_start_marker.setValue(val)
 
+    def rewind(self):
+        self.video_player.mediaPlayer.setPosition(max(0, self.video_player.mediaPlayer.position() - self.rewind_speed))
+        if self.video_player.mediaPlayer.position() < 1000 * self.movement_start:
+            self.movement_start = self.video_player.mediaPlayer.position() / 1000.0
+            self.set_marker_value(self.video_player.mediaPlayer.position() / 1000.0)
+
+
 
 
 class DataLoaderThread(QThread):
@@ -438,23 +477,19 @@ class DataLoaderThread(QThread):
         super().__init__()
 
     def run(self):
-        from prototype2_setup import setup
-        from Neurogram_short import Recording
-        self.setup = setup
-        self.load()
+        # from prototype2_setup import setup
+        # from Neurogram_short import Recording
 
-    def setup(self):
-        pass
-
-    def load(self):
-        record = self.setup()
-
-        channel = record.channels[0]
+        record = self.setup(MainWindow.signal_filepath)
+        print("record.channels:")
+        print(record.column_ch)
+        channel = record.column_ch[0]
         start_time = None
         end_time = None
 
         if start_time is None:
             start_index = 0
+
         else:
             start_index = 0
             start_index += int(start_time[:3]) * 60 * Recording.window_length
@@ -475,13 +510,195 @@ class DataLoaderThread(QThread):
 
         self.sample_rate = 100
 
+        options_filter = [
+            "None",
+            "butter",
+            "fir"]  # Binomial Weighted Average Filter
+
+        options_detection = [
+            "get_spikes_threshCrossing",  # Ojo: get_spikes_threshCrossing needs detects also cardiac
+            # spikes, so use cardiac_window. This method is slower
+            "get_spikes_method",  # Python implemented get_spikes() method. Faster
+            "so_cfar"]  # Smallest of constant false-alarm rate filter
+
+        options_threshold = [
+            "positive",
+            "negative",
+            "both_thresh"]
+        # %%
+        # Configure
+        config_text = []
+        record.apply_filter = options_filter[1]
+        record.detect_method = options_detection[1]  # leave it to butter (option 1)
+        record.thresh_type = options_threshold[0]  # do not use it for now
+        # Select channel position/number in intan (not channel number in device)
+
+        # record.channels = [5,8,13]  # Select the channels to use. E.g. 5,8,13 for the recording you have now. Include 'all' to select all the channels available
+        # record.channels = channels
+
+        # record.path = path
+        # config_text = ['Load_from_file %s' % load_from_file, 'Filter: %s' % record.apply_filter,
+        #                'Detection: %s' % record.detect_method, 'Threhold type: %s' % record.thresh_type,
+        #                'Channels: %s' % record.channels, 'Downsampling: %s' % downsample]
+        # config_text.append('Port %s' % (port))
+        # config_text.append('Start %s, Dur: %s' % (start, dur))
+        # config_text.append('Channels: %s' % record.channels)
+        # Ramarkable timestamps (in sec)
+
+        group = '1'
+
+        print('SELECTED GENERAL CONFIGURATION:')
+        print('Filter: %s' % record.apply_filter)
+        print('Detection: %s' % record.detect_method)
+        print('Threhold type: %s' % record.thresh_type)
+        print('Channels: %s' % record.channels)
+        print('-------------------------------------')
+
+        record.select_channels(
+            record.channels)  # keep_ch_loc=True if we want to display following the map. Otherwise follow the order provided by selected channels.
+        print('map_array: %s' % record.map_array)
+        print('ch_loc: %s' % record.ch_loc)
+        print('filter_ch %s' % record.filter_ch)
+        print('column_ch %s' % record.column_ch)
+        # %%
+        # Configure
+        record.num_rows = 2  # int(round(len(record.filter_ch)/2)) # round(n_components/2)
+        record.num_columns = 1  # int(len(record.filter_ch)-round(len(record.filter_ch)/2))+1
+        # plot_ch = int(record.map_array[int(record.ch_loc[0])])
+        plot_ch = int(record.column_ch[0])
+        print(plot_ch)
+        print(record.num_rows)
+        print(record.num_columns)
+        save_figure = True
+        # %%
+        # Gain
+        gain = 1
+        config_text.append('Gain: %s' % (gain))
+        # %%
+        # Maximum bpm
+        bpm = 300
+        record.set_bpm(bpm)  # General max bpm in rat HR. Current neurograms at 180bpm
+        config_text.append('BPM: %s' % (bpm))
+        # %%
+        # Final Initialisations - no change
+
+        # Initialize dataframe for results
+        # ----------------------------------------------------
+        record.rolling_metrics = pd.DataFrame()
+        record.summary = pd.DataFrame(columns=['Max_spike_rate', 'Min_spike_rate',
+                                               'Max_amplitude_sum', 'Min_amplitude_sum'])
+        record.summary.index.name = 'channel'
+        record.sig2noise = []  # To save the snr for each channel
+
+        # Intialize dataframes for wavelet decomposition
+        # ---------------------------------------------------
+        neural_wvl = pd.DataFrame(columns=record.filter_ch)
+        neural_wvl_denoised = pd.DataFrame(columns=record.filter_ch)
+        other_wvl = pd.DataFrame(columns=record.filter_ch)
+        substraction_wvl = pd.DataFrame(columns=record.filter_ch)
+        # %%
+        # Config for bandpass filter
+
+        filt_config = {
+            'W': [400, 4000],  # (max needs to be <fs/2 per Nyquist)
+            'None': {},
+            'butter': {
+                'N': 9,  # The order of the filter
+                'btype': 'bandpass',  # 'bandpass', #'hp'  #'lowpass'     # The type of filter.
+            },
+            'fir': {
+                'n': 4,
+            },
+            'notch': {
+                'quality_factor': 30,
+            },
+        }
+
+        filt_config['butter']['Wn'] = filt_config['W']
+        filt_config['butter']['fs'] = record.fs
+
+        config_text.append('filt_config: %s' % json.dumps(filt_config))
+        # %%
+        # Apply filter
+
+        # Configure
+        time_start = time.time()
+        signal2filter = record.recording  # The neural data imported via pkl file
+        config_text.append('signal2filter: %s' % signal2filter.name)
+        record.filter(signal2filter, record.apply_filter, **filt_config[record.apply_filter])
+        # Change from float64 to float 16
+        record.filtered = convertDfType(record.filtered, typeFloat='float32')
+        # print(record.filtered.dtypes)
+        print("Time elapsed: {} seconds".format(time.time() - time_start))
+
+        print("\n\n\n\n\n")
+        print("------------------------------------------------------")
+        print("Setup Complete!")
+
         self.x = np.arange(0, len(self.x_range)) / self.sample_rate
         self.y = record.filtered['ch_%s' % channel][self.x_range]
 
         self.data_loaded.emit((self.x, self.y))
 
-    def rerun(self):
-        self.load()
+    def setup(self, filepath):
+        print("Reading data from", filepath)
+        neural = pd.read_pickle(filepath)
+        print("Data read!")
+
+        # Various parameters
+        start = 0
+        dur = None
+        length = len(neural)
+        map_array = self.get_map_array('../../datasets/map_linear.csv')
+        channels = []
+
+        # Check the file is a data file
+        if neural.index.name == 'time':
+            # Convert neural.index to HH:MM:SS format
+
+            # Set time interval
+            print(start)
+            if dur is None:
+                stop = len(neural)
+            else:
+                stop = int(start + dur)
+            print('stop: %s' % stop)
+            start = int(start)
+
+            neural = neural.iloc[start:stop]
+
+            # Get Sampling frequency
+            fs = 1 / (neural['seconds'].iloc[2] - neural['seconds'].iloc[1])
+            print(fs)
+
+            # Downcast it type float64
+            for col in neural.columns:
+                if col.startswith('ch_'):
+                    neural[col] = neural[col].astype('float32')
+                    channels.append(col.replace('ch_', ''))
+            print(channels)
+            basename_without_ext = os.path.splitext(os.path.basename(filepath))[0]
+        else:
+            print('ERROR: You have selected a wrong file, try again')
+
+        return Recording(neural=neural, fs=fs, length=length, map_array=map_array, filename=basename_without_ext, column_ch=channels)
+
+    def get_map_array(self, map_path='../../datasets/map_linear.csv'):
+        # path = '../../datasets/rat7&8/day2'
+        # map_path = '../../datasets/map_linear.csv'
+
+        map_array = pd.read_csv(map_path, header=None)
+        map_array = map_array.to_numpy()
+        map_array = map_array.flatten()
+
+        try:
+            np.shape(map_array)[0]
+        except:
+            print('If map_array is 1D, it needs to be a row. Transposing...')
+            map_array = map_array.transpose()
+        else:
+            map_array = map_array
+        return map_array
 
 
 
@@ -544,10 +761,17 @@ class Plotter(QWidget):
     plot_widget_zoom = None
     plot_widget_glucose = None
     data = None
+
     viewRect = QGraphicsRectItem()
-    viewRect_glucose = QGraphicsRectItem()
     viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
-    viewRect_glucose.setBrush(QBrush(QColor(255, 255, 255, 100)))
+
+    @staticmethod
+    def init_viewRect():
+        Plotter.viewRect = QGraphicsRectItem()
+        Plotter.viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
+
+    viewRect_glucose = QGraphicsRectItem()
+    viewRect_glucose.setBrush(QBrush(QColor(0, 0, 0, 100)))
     sample_rate = 100
 
     # timestamps = []
@@ -566,8 +790,25 @@ class Plotter(QWidget):
     x_o, y_o = None, None
 
     current_marker_whole = InfiniteLine(angle=90, movable=False, pen='r')
+    @staticmethod
+    def init_current_marker_whole():
+        Plotter.current_marker_whole = InfiniteLine(angle=90, movable=False, pen='r')
+
     current_marker_zoom = InfiniteLine(angle=90, movable=False, pen='r')
+    @staticmethod
+    def init_current_marker_zoom():
+        Plotter.current_marker_zoom = InfiniteLine(angle=90, movable=False, pen='r')
+
+
     current_marker_glucose = InfiniteLine(angle=90, movable=False, pen='r')
+    @staticmethod
+    def init_current_marker_glucose():
+        Plotter.current_marker_glucose = InfiniteLine(angle=90, movable=False, pen='r')
+
+    @staticmethod
+    def init_viewRect_glucose():
+        Plotter.viewRect_glucose = QGraphicsRectItem()
+        Plotter.viewRect_glucose.setBrush(QBrush(QColor(0, 0, 0, 100)))
 
     def __init__(self, data, ylim):
         super().__init__()
@@ -586,17 +827,26 @@ class Plotter(QWidget):
         self.movement_start_marker.setVisible(False)
 
 
+
+
     def plot_data_whole(self):
         Plotter.plot_widget_whole = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
         self.plot = Plotter.plot_widget_whole.plot(self.x, self.y)
-
+        # print("Checking Plotter.current_marker_whole:")
+        # print(Plotter.current_marker_whole)
+        # print(type(Plotter.current_marker_whole))
+        # print("Checking plot_widget_whole:")
+        # print(Plotter.plot_widget_whole)
+        # print(type(Plotter.plot_widget_whole))
+        Plotter.init_current_marker_whole()
         Plotter.plot_widget_whole.addItem(Plotter.current_marker_whole)
         Plotter.plot_widget_whole.addItem(self.movement_start_marker)
         width = self.x[-1]
+        Plotter.init_viewRect()
         Plotter.viewRect.setRect(QRectF(0, -250, width, 500))
         Plotter.plot_widget_whole.plotItem.vb.addItem(Plotter.viewRect)
 
-        Plotter.plot_widget_whole.setYRange(-250, 250)
+        Plotter.plot_widget_whole.setYRange(self.ylim[0],self.ylim[1])
 
         self.layout.addWidget(Plotter.plot_widget_whole)
 
@@ -604,16 +854,18 @@ class Plotter(QWidget):
     def plot_glucose_whole(self):
         pg.setConfigOption('background', 'w')
         pg.setConfigOption('foreground', 'k')
-        pen = pg.mkPen(width=10, color='k')
+        pen = pg.mkPen(width=5, color='k')
         Plotter.plot_widget_glucose = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
-        self.plot = Plotter.plot_widget_glucose.plot(self.x, self.y, pen=pen)
 
+        Plotter.init_current_marker_glucose()
+        self.plot = Plotter.plot_widget_glucose.plot(self.x, self.y, pen=pen)
         Plotter.plot_widget_glucose.addItem(Plotter.current_marker_glucose)
         width = self.x[-1]
+        Plotter.init_viewRect_glucose()
         Plotter.viewRect_glucose.setRect(QRectF(0, -250, width, 500))
         Plotter.plot_widget_glucose.plotItem.vb.addItem(Plotter.viewRect_glucose)
 
-        Plotter.plot_widget_glucose.setYRange(-250, 250)
+        Plotter.plot_widget_glucose.setYRange(self.ylim[0], self.ylim[1])
 
         self.layout.addWidget(Plotter.plot_widget_glucose)
 
@@ -624,13 +876,15 @@ class Plotter(QWidget):
         Plotter.plot_widget_zoom = pg.PlotWidget(axisItems={'bottom': TimeAxisItem(orientation='bottom')})
         self.plot = Plotter.plot_widget_zoom.plot(self.x, self.y)
 
+        Plotter.init_current_marker_zoom()
+
         Plotter.plot_widget_zoom.addItem(Plotter.current_marker_zoom)
         Plotter.plot_widget_zoom.addItem(self.movement_start_marker)
 
         Plotter.plot_widget_zoom.sigRangeChanged.connect(self.update_view_rect_on_zoom)
         Plotter.plot_widget_zoom.scene().sigMouseClicked.connect(self.on_plot_clicked)
 
-        Plotter.plot_widget_zoom.setYRange(-250, 250)
+        Plotter.plot_widget_zoom.setYRange(self.ylim[0],self.ylim[1])
 
         Plotter.plot_widget_zoom.setMouseEnabled(x=True, y=False)
 
@@ -740,6 +994,7 @@ class Plotter(QWidget):
     def zoom_out(self):
         window.slider.setValue(window.slider.value() - 1)
 
+
     @classmethod
     def move_left(cls):
         cls.calculate_movement('left')
@@ -846,10 +1101,13 @@ class Plotter(QWidget):
         cls.plot_widget_zoom = None
         cls.plot_widget_glucose = None
         cls.data = None
-        cls.viewRect = QGraphicsRectItem()
-        cls.viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
-        cls.viewRect_glucose = QGraphicsRectItem()
-        cls.viewRect_glucose.setBrush(QBrush(QColor(255, 255, 255, 100)))
+        # cls.viewRect = QGraphicsRectItem()
+        # cls.viewRect.setBrush(QBrush(QColor(255, 255, 255, 100)))
+        # cls.viewRect_glucose = QGraphicsRectItem()
+        # cls.viewRect_glucose.setBrush(QBrush(QColor(255, 255, 255, 100)))
+        cls.init_current_marker_whole()
+        cls.init_current_marker_zoom()
+        cls.init_current_marker_glucose()
         cls.sample_rate = 100
 
         cls.unsaved_intervals = set()
@@ -990,17 +1248,31 @@ class Plotter(QWidget):
 class MovementTypeDialog(QDialog):
 
     categories = {
-        'Stationary + clean': 's',
-        'Moving': 'm',
-        'Eating': 'e',
-        'Chewing': 'c'
+        '1: Stationary + clean': 's',
+        '2: Stationary + noisy': 'n',
+        '3: Moving': 'm',
+        '4: Eating': 'e',
     }
 
     colours = {
         's': QColor(127, 88, 175, 100),     #'#FE218B32'
-        'm': QColor(100, 197, 235, 100),    #'#FED70032'
-        'e': QColor(232, 77, 138, 100),     #'#21B0FE32'
-        'c': QColor(254, 179, 38, 100)      #'#0000FF32'
+        'n': QColor(100, 197, 235, 100),    #'#FED70032'
+        'm': QColor(232, 77, 138, 100),     #'#21B0FE32'
+        'e': QColor(254, 179, 38, 100)      #'#0000FF32'
+    }
+
+    colours_hex = {
+        's': '#7F58AF',
+        'n': '#64C5EB',
+        'm': '#e85D8A',
+        'e': '#FEB326'
+    }
+
+    key_to_category = {
+        Qt.Key.Key_1: '1: Stationary + clean',
+        Qt.Key.Key_2: '2: Stationary + noisy',
+        Qt.Key.Key_3: '3: Moving',
+        Qt.Key.Key_4: '4: Eating',
     }
 
     def __init__(self, parent=None):
@@ -1013,6 +1285,7 @@ class MovementTypeDialog(QDialog):
         for cat in self.categories:
             btn = QPushButton(cat, self)
             btn.clicked.connect(lambda checked, category=cat: self.select_category(category))
+            btn.setStyleSheet(f'background-color: {self.colours_hex[self.categories[cat]]}')
             layout.addWidget(btn)
 
         self.setLayout(layout)
@@ -1023,6 +1296,13 @@ class MovementTypeDialog(QDialog):
 
     def get_selected_category(self):
         return self.selected_category
+
+    def keyPressEvent(self, event):
+        if event.key() in self.key_to_category:
+            category = self.key_to_category[event.key()]
+            self.select_category(category)
+        else:
+            super().keyPressEvent(event)
 
 
 
